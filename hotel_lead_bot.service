@@ -1,0 +1,17 @@
+[Unit]
+Description=HotelLeadBot — Telegram bot for B2B hotel lead collection
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/hotel_lead_bot
+ExecStart=/opt/hotel_lead_bot/venv/bin/python bot.py
+Restart=always
+RestartSec=5
+EnvironmentFile=/opt/hotel_lead_bot/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

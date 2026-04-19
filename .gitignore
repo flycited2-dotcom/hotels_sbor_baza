@@ -1,0 +1,14 @@
+.env
+credentials.json
+data/
+reports/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.db-shm
+*.db-wal
+*.xlsx
+*.log
+.DS_Store
