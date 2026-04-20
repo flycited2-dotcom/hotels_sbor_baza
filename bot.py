@@ -23,6 +23,7 @@ async def set_commands(bot: Bot):
         BotCommand(command="new",       description="Добавить новый контакт"),
         BotCommand(command="status",    description="Статистика контактов"),
         BotCommand(command="report",    description="Отчёт за сегодня (Excel)"),
+        BotCommand(command="week",      description="Отчёт за 7 дней (Excel)"),
         BotCommand(command="master",    description="Полная база (Excel)"),
         BotCommand(command="find",      description="Поиск по имени / телефону / городу"),
         BotCommand(command="getlead",   description="Карточка контакта по ID"),

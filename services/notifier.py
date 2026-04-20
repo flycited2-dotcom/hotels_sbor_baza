@@ -1,4 +1,5 @@
 from aiogram import Bot
+from aiogram.types import FSInputFile
 from config import GROUP_CHAT_ID
 import logging
 
@@ -65,12 +66,11 @@ async def send_daily_digest(bot: Bot, leads: list, filepath: str):
             await bot.send_message(GROUP_CHAT_ID, full_text, parse_mode="HTML")
 
         if leads and filepath:
-            with open(filepath, "rb") as f:
-                await bot.send_document(
-                    GROUP_CHAT_ID,
-                    document=f,
-                    caption=f"📎 Excel-отчёт за сегодня ({today_count} контактов)",
-                )
+            await bot.send_document(
+                GROUP_CHAT_ID,
+                document=FSInputFile(filepath),
+                caption=f"📎 Excel-отчёт за сегодня ({today_count} контактов)",
+            )
     except Exception as e:
         logger.error(f"Error sending daily digest: {e}")
 
@@ -86,11 +86,10 @@ async def send_weekly_master(bot: Bot, total: int, week_count: int, filepath: st
         await bot.send_message(GROUP_CHAT_ID, text, parse_mode="HTML")
         if filepath:
             from datetime import date
-            with open(filepath, "rb") as f:
-                await bot.send_document(
-                    GROUP_CHAT_ID,
-                    document=f,
-                    caption=f"📎 Мастер-файл на {date.today().strftime('%d.%m.%Y')}",
-                )
+            await bot.send_document(
+                GROUP_CHAT_ID,
+                document=FSInputFile(filepath),
+                caption=f"📎 Мастер-файл на {date.today().strftime('%d.%m.%Y')}",
+            )
     except Exception as e:
         logger.error(f"Error sending weekly master: {e}")

@@ -97,6 +97,16 @@ def generate_daily_report(leads: list) -> str:
     return filepath
 
 
+def generate_weekly_report(leads: list) -> str:
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+    today_str = date.today().strftime("%Y-%m-%d")
+    filename = f"weekly_{today_str}.xlsx"
+    filepath = os.path.join(REPORTS_DIR, filename)
+    wb = _build_workbook(leads, f"Неделя до {today_str}")
+    wb.save(filepath)
+    return filepath
+
+
 def generate_master_report(leads: list) -> str:
     os.makedirs(REPORTS_DIR, exist_ok=True)
     today_str = date.today().strftime("%Y-%m-%d")

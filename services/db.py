@@ -75,6 +75,19 @@ async def get_leads_today() -> list:
         return [dict(r) for r in rows]
 
 
+async def get_leads_this_week() -> list:
+    from datetime import timedelta
+    week_ago = (date.today() - timedelta(days=6)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM leads WHERE created_at >= ? ORDER BY id",
+            (week_ago,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
 async def get_all_leads() -> list:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

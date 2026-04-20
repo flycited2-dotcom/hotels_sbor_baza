@@ -1,8 +1,8 @@
 from aiogram import Router, F
-from aiogram.types import Message, ReplyKeyboardRemove
+from aiogram.types import Message, ReplyKeyboardRemove, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
-from datetime import date
+from datetime import date, timedelta
 from services import db, excel, notifier, sheets
 from handlers.inline import status_kb
 
@@ -35,32 +35,56 @@ async def cmd_status(message: Message):
 @router.message(Command("report"))
 async def cmd_report(message: Message):
     await message.answer("⏳ Генерирую отчёт за сегодня...")
-    leads = await db.get_leads_today()
-    if not leads:
-        await message.answer("Сегодня контактов не добавлено.")
-        return
-    filepath = excel.generate_daily_report(leads)
-    with open(filepath, "rb") as f:
+    try:
+        leads = await db.get_leads_today()
+        if not leads:
+            await message.answer("Сегодня контактов не добавлено.")
+            return
+        filepath = excel.generate_daily_report(leads)
         await message.answer_document(
-            document=f,
+            document=FSInputFile(filepath),
             caption=f"📎 Отчёт за {date.today().strftime('%d.%m.%Y')} — {len(leads)} контактов",
         )
+    except Exception as e:
+        await message.answer(f"❌ Ошибка генерации отчёта: {e}")
+
+
+@router.message(Command("week"))
+async def cmd_week(message: Message):
+    """Отчёт за последние 7 дней."""
+    await message.answer("⏳ Генерирую отчёт за неделю...")
+    try:
+        leads = await db.get_leads_this_week()
+        if not leads:
+            await message.answer("За последние 7 дней контактов не добавлено.")
+            return
+        filepath = excel.generate_weekly_report(leads)
+        week_start = (date.today() - timedelta(days=6)).strftime("%d.%m.%Y")
+        week_end = date.today().strftime("%d.%m.%Y")
+        await message.answer_document(
+            document=FSInputFile(filepath),
+            caption=f"📎 Отчёт за неделю ({week_start}–{week_end}) — {len(leads)} контактов",
+        )
+    except Exception as e:
+        await message.answer(f"❌ Ошибка генерации отчёта: {e}")
 
 
 @router.message(Command("master"))
 async def cmd_master(message: Message):
-    """Выгрузка полной базы прямо сейчас, не дожидаясь пятницы."""
+    """Выгрузка полной базы прямо сейчас."""
     await message.answer("⏳ Генерирую мастер-файл...")
-    leads = await db.get_all_leads()
-    if not leads:
-        await message.answer("База пуста.")
-        return
-    filepath = excel.generate_master_report(leads)
-    with open(filepath, "rb") as f:
+    try:
+        leads = await db.get_all_leads()
+        if not leads:
+            await message.answer("База пуста.")
+            return
+        filepath = excel.generate_master_report(leads)
         await message.answer_document(
-            document=f,
+            document=FSInputFile(filepath),
             caption=f"📎 Мастер-файл на {date.today().strftime('%d.%m.%Y')} — {len(leads)} контактов",
         )
+    except Exception as e:
+        await message.answer(f"❌ Ошибка генерации мастер-файла: {e}")
 
 
 @router.message(Command("edit"))
@@ -184,6 +208,7 @@ async def cmd_help(message: Message):
         "/new — Добавить новый контакт\n"
         "/status — Статистика (сегодня / всего)\n"
         "/report — Скачать Excel за сегодня\n"
+        "/week — Скачать Excel за последние 7 дней\n"
         "/master — Скачать полную базу (Excel)\n"
         "/find запрос — Поиск по имени, телефону, городу\n"
         "/getlead ID — Карточка контакта по номеру\n"
