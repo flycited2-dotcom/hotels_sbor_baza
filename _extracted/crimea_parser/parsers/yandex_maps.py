@@ -74,20 +74,58 @@ async def _has_captcha(page) -> bool:
     return False
 
 
+async def _click_show_phone(page) -> None:
+    """Я.Карты часто прячут телефон под кнопкой/спойлером. Пробуем раскрыть."""
+    selectors = [
+        "[class*='card-phones-view__phone-number']",
+        "[class*='card-phones']  button",
+        "[class*='card-phones-view'] [role='button']",
+        "div[class*='phone'] button",
+        "button:has-text('Показать')",
+        "span:has-text('Показать телефон')",
+    ]
+    for sel in selectors:
+        try:
+            el = await page.query_selector(sel)
+            if not el:
+                continue
+            await el.scroll_into_view_if_needed(timeout=1500)
+            await el.click(timeout=2000)
+            await page.wait_for_timeout(700)
+            return
+        except Exception:
+            continue
+
+
 async def _scrape_org_page(context, org_id: str) -> dict:
-    """Открыть /maps/org/<id>/ напрямую: телефон/сайт/email видны без WebGL."""
+    """Открыть /maps/org/<id>/ напрямую: телефон/сайт/email видны без WebGL.
+    В headed/xvfb-режиме телефон может быть скрыт за «Показать» — раскрываем.
+    """
     out = {"phone": "", "website": "", "email": ""}
     page = await context.new_page()
     try:
         url = f"https://yandex.ru/maps/org/{org_id}/"
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-            await page.wait_for_timeout(3000)
         except Exception:
             return out
 
+        # ждём появления контактного блока (любой из признаков)
+        try:
+            await page.wait_for_selector(
+                "a[href^='tel:'], [class*='card-phones'], [itemprop='telephone'], "
+                "[class*='_phone']",
+                timeout=6000,
+            )
+        except Exception:
+            await page.wait_for_timeout(2000)
+
+        # пробуем раскрыть телефон, если он скрыт
+        await _click_show_phone(page)
+
         # phone
         for sel in ["a[href^='tel:']", "[itemprop='telephone']",
+                    "[class*='card-phones-view__phone-number']",
                     "[class*='card-phones']", "[class*='phones-item__text']",
                     "[class*='_phone']"]:
             try:

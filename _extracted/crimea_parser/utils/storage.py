@@ -3,7 +3,13 @@ import os
 import re
 from datetime import datetime
 
-FIELDS = ["city", "name", "address", "phone", "email", "website", "category", "source", "parsed_at"]
+from utils.categories import normalize as normalize_category
+
+FIELDS = [
+    "city", "name", "client_type", "category",
+    "address", "phone", "email", "website", "social",
+    "comment", "source", "parsed_at",
+]
 
 OUTPUT_DIR = "output"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, f"result_{datetime.now().strftime('%Y%m%d_%H%M')}.csv")
@@ -51,6 +57,8 @@ def save_item(item):
     cleaned = {k_: _clean(item.get(k_, "")) for k_ in FIELDS}
     if cleaned.get("phone"):
         cleaned["phone"] = normalize_phone(cleaned["phone"])
+    if not cleaned.get("client_type"):
+        cleaned["client_type"] = normalize_category(cleaned.get("category", ""))
 
     _rows.append(cleaned)
     _flush()
@@ -65,6 +73,7 @@ def _flush():
         writer = csv.DictWriter(
             f, fieldnames=FIELDS,
             delimiter=CSV_DELIMITER, quoting=csv.QUOTE_ALL,
+            extrasaction="ignore", restval="",
         )
         writer.writeheader()
         writer.writerows(_rows)
@@ -76,3 +85,72 @@ def total():
 
 def get_output_file():
     return OUTPUT_FILE
+
+
+_NAME_NORMALIZE_RE = re.compile(r"[^\w\s]", re.UNICODE)
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_name(name: str) -> str:
+    """Жёстко нормализуем имя для сопоставления записей из разных источников.
+    'Отель «Ялта», 4*' → 'отель ялта 4'.
+    """
+    if not name:
+        return ""
+    s = name.lower()
+    s = _NAME_NORMALIZE_RE.sub(" ", s)
+    s = _WS_RE.sub(" ", s).strip()
+    return s
+
+
+_MERGE_FIELDS = ("phone", "email", "website", "address", "social")
+# Чем выше score источника — тем приоритетнее его данные при совпадениях.
+_SOURCE_PRIORITY = {
+    "OSM": 5,
+    "2ГИС": 4,
+    "Авито": 3,
+    "Я.Карты": 2,
+    "Суточно.ру": 2,
+    "Ostrovok": 1,
+    "Wikidata": 1,
+}
+
+
+def cross_source_merge() -> int:
+    """Сшиваем записи разных источников с похожими именами в одном городе.
+    Берём недостающие поля у записи с наивысшим source priority.
+    Возвращаем число обогащённых ячеек.
+    """
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for r in _rows:
+        norm = _normalize_name(r.get("name", ""))
+        if not norm:
+            continue
+        city = (r.get("city") or "").lower().strip()
+        groups.setdefault((norm, city), []).append(r)
+
+    enriched = 0
+    for rows in groups.values():
+        if len(rows) < 2:
+            continue
+        # сортируем по приоритету источника убыванию
+        rows_sorted = sorted(
+            rows,
+            key=lambda r: _SOURCE_PRIORITY.get(r.get("source", ""), 0),
+            reverse=True,
+        )
+        for r in rows:
+            for f in _MERGE_FIELDS:
+                if r.get(f):
+                    continue
+                for donor in rows_sorted:
+                    if donor is r:
+                        continue
+                    val = donor.get(f)
+                    if val:
+                        r[f] = val
+                        enriched += 1
+                        break
+    if enriched:
+        _flush()
+    return enriched

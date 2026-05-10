@@ -165,7 +165,8 @@ Type=oneshot
 User=$USER
 WorkingDirectory=$DEPLOY_DIR
 Environment=PYTHONUNBUFFERED=1
-ExecStart=$VENV_PYTHON $DEPLOY_DIR/main.py
+Environment=HEADLESS=0
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x1024x24" $VENV_PYTHON $DEPLOY_DIR/main.py
 TimeoutStartSec=12h
 StandardOutput=append:$DEPLOY_DIR/parser.log
 StandardError=append:$DEPLOY_DIR/parser_error.log

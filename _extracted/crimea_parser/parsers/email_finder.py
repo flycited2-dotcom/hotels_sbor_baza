@@ -2,11 +2,15 @@
 
 Логика:
 1. На главной — ищем mailto:/tel:/visible-text email и phone.
-2. Дополнительно обходим типовые контактные страницы (/contacts, /kontakty, ...).
-3. Из найденного текста пробуем выудить адрес (эвристика на «г./пгт./ул./ш./пр.»).
+2. Читаем JSON-LD (script[type='application/ld+json']) — там часто структурированные email/telephone.
+3. Дополнительно обходим типовые контактные страницы (/contacts, /kontakty, /booking ...).
+4. Из найденного текста пробуем выудить адрес (эвристика на «г./пгт./ул./ш./пр.»).
+5. Ранжируем email: фирменный (домен совпадает с website) > info@/sales@/booking@ > остальные.
+6. Подбираем social-ссылки (vk.com, t.me, instagram, ok.ru) на случай отсутствия website.
 """
 import asyncio
 import csv
+import json
 import os
 import random
 import re
@@ -31,10 +35,21 @@ ADDRESS_RE = re.compile(
 )
 
 EMAIL_BLOCKLIST = (
-    "example.", "@domain", "noreply", "no-reply",
-    "@sentry", "@wixpress", "@2x.png", ".png", ".jpg", ".jpeg", ".webp",
-    "@react", "@vue", "@babel", "@types", "@material",
-    "@yandex-team", "@google-analytics", "@cloudflare",
+    "example.", "@domain", "@test.", "noreply", "no-reply", "do-not-reply",
+    "@sentry", "@wixpress", "@2x.png", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif",
+    "@react", "@vue", "@babel", "@types", "@material", "@material-ui",
+    "@yandex-team", "@google-analytics", "@cloudflare", "@gravatar",
+    "webmaster@", "postmaster@", "abuse@", "hostmaster@",
+    "admin@yandex", "admin@google", "support@google", "support@apple",
+    "your@email", "name@email", "test@",
+)
+
+# Префиксы фирменных email отелей — чем выше в списке, тем выше приоритет.
+PREFERRED_EMAIL_PREFIXES = (
+    "reservation", "reservations", "booking", "book",
+    "reception", "info", "hotel", "hotels",
+    "sales", "manager", "office", "contact",
+    "rsv", "stay",
 )
 
 CONTACT_PATHS = [
@@ -45,7 +60,16 @@ CONTACT_PATHS = [
     "/svyazatsya", "/связаться", "/контакты", "/о-нас",
     "/index.php?route=information/contact",
     "/info/contacts", "/cms/contacts",
+    # Hotel-specific
+    "/booking", "/reservation", "/reservations", "/book",
+    "/cooperation", "/partners", "/agents", "/info-hotel",
+    "/rezervirovanie", "/zabronirovat", "/бронирование",
 ]
+
+SOCIAL_HOSTS = (
+    "vk.com", "vk.ru", "t.me", "telegram.me", "telegram.org",
+    "instagram.com", "ok.ru", "facebook.com", "wa.me", "whatsapp.com",
+)
 
 
 def _decode_obfuscated_email(text: str) -> str:
@@ -64,17 +88,57 @@ def _decode_obfuscated_email(text: str) -> str:
     return ""
 
 
-def pick_email(text: str) -> str:
+def _site_domain(website: str) -> str:
+    if not website:
+        return ""
+    try:
+        host = urlparse(website).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        return host
+    except Exception:
+        return ""
+
+
+def _email_score(email: str, site_domain: str) -> int:
+    """Чем больше — тем приоритетнее. -1 = в blocklist (отбрасывается)."""
+    low = email.lower()
+    if any(b in low for b in EMAIL_BLOCKLIST):
+        return -1
+    if low.endswith((".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif")):
+        return -1
+    score = 0
+    try:
+        local, _, domain = low.partition("@")
+    except Exception:
+        return 0
+    # +100 — фирменный (домен совпадает с сайтом)
+    if site_domain and (domain == site_domain or domain.endswith("." + site_domain)
+                        or site_domain.endswith("." + domain)):
+        score += 100
+    # +N — «правильный» префикс (info@/booking@/...)
+    for i, pref in enumerate(PREFERRED_EMAIL_PREFIXES):
+        if local == pref or local.startswith(pref + "."):
+            score += 50 - i  # info=50, reservation=49, ...
+            break
+    return score
+
+
+def pick_email(text: str, site_domain: str = "") -> str:
+    """Выбрать лучший email из текста с учётом домена сайта (фирменность)."""
     if not text:
         return ""
+    candidates = set()
     for e in EMAIL_RE.findall(text):
-        low = e.lower()
-        if any(b in low for b in EMAIL_BLOCKLIST):
-            continue
-        if low.endswith((".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif")):
-            continue
-        return e
-    return ""
+        candidates.add(e)
+    best = ""
+    best_score = -1
+    for e in candidates:
+        s = _email_score(e, site_domain)
+        if s > best_score:
+            best = e
+            best_score = s
+    return best if best_score >= 0 else ""
 
 
 def pick_phone(text: str) -> str:
@@ -94,17 +158,27 @@ def pick_address(text: str) -> str:
     return addr[:200]
 
 
-async def _harvest_dom(page) -> tuple[str, str]:
-    """mailto: / tel: ссылки в DOM (приоритет)."""
+async def _harvest_dom(page, site_domain: str = "") -> tuple[str, str]:
+    """mailto: / tel: ссылки в DOM (приоритет). Если mailto несколько — выбираем лучший."""
     email = ""
     phone = ""
     try:
-        em = await page.query_selector("a[href^='mailto:']")
-        if em:
+        ems = await page.query_selector_all("a[href^='mailto:']")
+        candidates = []
+        for em in ems:
             href = await em.get_attribute("href") or ""
             cand = href.replace("mailto:", "").split("?")[0].strip()
             if cand and "@" in cand:
-                email = cand
+                candidates.append(cand)
+        if candidates:
+            best = ""
+            best_score = -1
+            for c in candidates:
+                s = _email_score(c, site_domain)
+                if s > best_score:
+                    best = c
+                    best_score = s
+            email = best if best_score >= 0 else ""
     except Exception:
         pass
     try:
@@ -129,20 +203,89 @@ async def _scroll_to_bottom(page, n: int = 6):
         await page.wait_for_timeout(400)
 
 
-async def _harvest_page(page) -> tuple[str, str, str]:
-    """email/phone/address из текущей страницы с DOM + полный HTML + visible text."""
-    email = phone = address = ""
-    e, p = await _harvest_dom(page)
+async def _extract_from_jsonld(page) -> tuple[str, str]:
+    """Из <script type='application/ld+json'> вытаскиваем email и telephone."""
+    email = phone = ""
+    try:
+        scripts = await page.query_selector_all("script[type='application/ld+json']")
+        for s in scripts:
+            txt = await s.inner_text()
+            if not txt or "{" not in txt:
+                continue
+            try:
+                data = json.loads(txt)
+            except Exception:
+                continue
+            stack = [data] if not isinstance(data, list) else list(data)
+            while stack:
+                node = stack.pop()
+                if isinstance(node, dict):
+                    if not email:
+                        e = node.get("email")
+                        if isinstance(e, str) and "@" in e:
+                            email = e.strip()
+                    if not phone:
+                        t = node.get("telephone")
+                        if isinstance(t, str) and t.strip():
+                            phone = normalize_phone(t.strip())
+                    for v in node.values():
+                        if isinstance(v, (dict, list)):
+                            stack.append(v)
+                elif isinstance(node, list):
+                    stack.extend(node)
+                if email and phone:
+                    return email, phone
+    except Exception:
+        pass
+    return email, phone
+
+
+async def _extract_social(page) -> str:
+    """Подбор первой социальной ссылки на профиль организации."""
+    try:
+        anchors = await page.query_selector_all("a[href^='http']")
+        for a in anchors:
+            href = await a.get_attribute("href") or ""
+            host = urlparse(href).netloc.lower()
+            if any(s in host for s in SOCIAL_HOSTS):
+                # отбрасываем share/sharer ссылки
+                low = href.lower()
+                if any(b in low for b in ("share", "sharer", "send_to", "post=")):
+                    continue
+                return href.split("?")[0]
+    except Exception:
+        pass
+    return ""
+
+
+async def _harvest_page(page, site_domain: str = "") -> tuple[str, str, str, str]:
+    """email/phone/address/social из текущей страницы (DOM + JSON-LD + HTML + visible)."""
+    email = phone = address = social = ""
+
+    # 1) DOM — mailto/tel (highest precision)
+    e, p = await _harvest_dom(page, site_domain)
     email = email or e
     phone = phone or p
+
+    # 2) JSON-LD — структурированные данные (часто чистые)
+    if not email or not phone:
+        e, p = await _extract_from_jsonld(page)
+        if not email:
+            email = e
+        if not phone:
+            phone = p
+
+    # 3) Полный HTML — regex с ранжированием
     try:
         html = await page.content()
         if not email:
-            email = pick_email(html) or _decode_obfuscated_email(html)
+            email = pick_email(html, site_domain) or _decode_obfuscated_email(html)
         if not phone:
             phone = pick_phone(html)
     except Exception:
         pass
+
+    # 4) Visible text — для address и обфусцированных email
     try:
         visible = await page.evaluate("document.body && document.body.innerText || ''")
         if not address:
@@ -151,25 +294,32 @@ async def _harvest_page(page) -> tuple[str, str, str]:
             email = _decode_obfuscated_email(visible)
     except Exception:
         pass
-    return email, phone, address
+
+    # 5) Social — отдельной попыткой
+    social = await _extract_social(page)
+
+    return email, phone, address, social
 
 
-async def enrich_from_website(page, website: str) -> tuple[str, str, str]:
-    email = phone = address = ""
+async def enrich_from_website(page, website: str) -> tuple[str, str, str, str]:
+    """Возвращает (email, phone, address, social)."""
+    email = phone = address = social = ""
+    site_domain = _site_domain(website)
     try:
         try:
             await page.goto(website, wait_until="domcontentloaded", timeout=20000)
         except Exception as e:
             print(f"    goto fail: {e}")
-            return "", "", ""
+            return "", "", "", ""
         await page.wait_for_timeout(1500)
         await _scroll_to_bottom(page, n=4)
         await page.wait_for_timeout(800)
 
-        e, p, a = await _harvest_page(page)
+        e, p, a, s = await _harvest_page(page, site_domain)
         email = email or e
         phone = phone or p
         address = address or a
+        social = social or s
 
         if not (email and phone and address):
             for path in CONTACT_PATHS:
@@ -180,17 +330,18 @@ async def enrich_from_website(page, website: str) -> tuple[str, str, str]:
                                     wait_until="domcontentloaded", timeout=10000)
                     await page.wait_for_timeout(1000)
                     await _scroll_to_bottom(page, n=2)
-                    e, p, a = await _harvest_page(page)
+                    e, p, a, s = await _harvest_page(page, site_domain)
                     email = email or e
                     phone = phone or p
                     address = address or a
+                    social = social or s
                 except Exception:
                     continue
 
     except Exception:
         pass
 
-    return email, phone, address
+    return email, phone, address, social
 
 
 async def run_enrichment(input_csv: str):
@@ -217,7 +368,8 @@ async def run_enrichment(input_csv: str):
         print(f"Не удалось прочитать CSV: {input_csv}")
         return None
 
-    targets = [r for r in rows if r.get("website") and (not r.get("email") or not r.get("phone") or not r.get("address"))]
+    targets = [r for r in rows if r.get("website") and (
+        not r.get("email") or not r.get("phone") or not r.get("address") or not r.get("social", ""))]
     print(f"\n=== Email Finder: {len(targets)}/{len(rows)} объектов на обогащение ===")
 
     async with async_playwright() as p:
@@ -230,15 +382,16 @@ async def run_enrichment(input_csv: str):
             need_email = not row.get("email")
             need_phone = not row.get("phone")
             need_addr = not row.get("address")
-            if not (need_email or need_phone or need_addr):
+            need_social = not row.get("social", "")
+            if not (need_email or need_phone or need_addr or need_social):
                 continue
 
             print(f"  [{i + 1}/{len(rows)}] {row.get('name','?')} → {row['website']}")
             try:
-                email, phone, address = await enrich_from_website(page, row["website"])
+                email, phone, address, social = await enrich_from_website(page, row["website"])
             except Exception as e:
                 print(f"    ошибка: {e}")
-                email = phone = address = ""
+                email = phone = address = social = ""
 
             if need_email and email:
                 row["email"] = email
@@ -249,16 +402,29 @@ async def run_enrichment(input_csv: str):
             if need_addr and address:
                 row["address"] = address
                 print(f"    address: {address}")
+            if need_social and social:
+                row["social"] = social
+                print(f"    social: {social}")
 
             await asyncio.sleep(random.uniform(1.2, 2.5))
 
         await browser.close()
 
     os.makedirs("output", exist_ok=True)
+    # Подбираем client_type для строк, у которых его нет (старые CSV без этой колонки)
+    try:
+        from utils.categories import normalize as _norm_cat
+        for r in rows:
+            if not r.get("client_type"):
+                r["client_type"] = _norm_cat(r.get("category", ""))
+    except Exception:
+        pass
+
     with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(
             f, fieldnames=FIELDS,
             delimiter=CSV_DELIMITER, quoting=csv.QUOTE_ALL,
+            extrasaction="ignore", restval="",
         )
         writer.writeheader()
         writer.writerows(rows)
