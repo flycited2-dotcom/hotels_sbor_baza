@@ -1,14 +1,68 @@
-.env
-credentials.json
-data/
-reports/
-venv/
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual envs
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.local
+*.key
+*.pem
+credentials.json
+service_account*.json
+google-credentials*.json
+
+# Parser output
+output/
+*.csv
+*.xlsx
+
+# Archives & deploy artifacts
+*.tar.gz
+*.zip
+
+# Logs
+*.log
+parser.log
+parser_error.log
+
+# DB
 *.db
+*.db-journal
 *.db-shm
 *.db-wal
-*.xlsx
-*.log
-.DS_Store
+*.sqlite
+*.sqlite3
+
+# Bot runtime data
+data/
+reports/
+
+# Local extracted dirs (если хочется хранить только архив — раскомментировать)
+# _extracted/
+
+# Скрины
+"клод скрины"/
+
+# Claude/agents служебное
+.agents/
+.claude/
+skills-lock.json
