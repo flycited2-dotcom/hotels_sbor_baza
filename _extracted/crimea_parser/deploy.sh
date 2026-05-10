@@ -174,6 +174,55 @@ EOF
 
 ok "Systemd сервис создан: $SYSTEMD_SERVICE"
 
+# ── 11b. СОЗДАНИЕ SYSTEMD-ЮНИТА ДЛЯ EMAIL FINDER ─────────────
+SYSTEMD_EMAIL_UNIT="/etc/systemd/system/crimea_email_finder.service"
+log "Создание email_finder юнита..."
+
+$SUDO tee "$SYSTEMD_EMAIL_UNIT" > /dev/null <<EOF
+[Unit]
+Description=Crimea Hotel Parser — Email Finder only (enrich latest CSV)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$USER
+WorkingDirectory=$DEPLOY_DIR
+Environment=PYTHONUNBUFFERED=1
+ExecStart=$VENV_PYTHON $DEPLOY_DIR/run_email_finder.py
+TimeoutStartSec=4h
+StandardOutput=append:$DEPLOY_DIR/email_finder.log
+StandardError=append:$DEPLOY_DIR/email_finder.log
+EOF
+
+ok "Email Finder юнит создан: $SYSTEMD_EMAIL_UNIT"
+
+# ── 11c. СОЗДАНИЕ TEMPLATE-ЮНИТА ДЛЯ ЗАПУСКА ОДНОГО ИСТОЧНИКА ─
+SYSTEMD_SOURCE_TEMPLATE="/etc/systemd/system/crimea_parser_source@.service"
+log "Создание template-юнита crimea_parser_source@<name>..."
+
+$SUDO tee "$SYSTEMD_SOURCE_TEMPLATE" > /dev/null <<EOF
+[Unit]
+Description=Crimea Hotel Parser — single source: %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$USER
+WorkingDirectory=$DEPLOY_DIR
+Environment=PYTHONUNBUFFERED=1
+Environment=HEADLESS=0
+Environment=ONLY_SOURCE=%i
+Environment=SKIP_ENRICHMENT=1
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x1024x24" $VENV_PYTHON $DEPLOY_DIR/main.py
+TimeoutStartSec=6h
+StandardOutput=append:$DEPLOY_DIR/parser.log
+StandardError=append:$DEPLOY_DIR/parser_error.log
+EOF
+
+ok "Source-template юнит создан: $SYSTEMD_SOURCE_TEMPLATE"
+
 # ── 12. СОЗДАНИЕ SYSTEMD ТАЙМЕРА (вс 03:00) ──────────────────
 log "Создание systemd таймера..."
 

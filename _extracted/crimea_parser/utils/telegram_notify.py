@@ -84,10 +84,11 @@ def send_document(token: str, chat_id: str, file_path: str, caption: str = "",
     head = "".join(parts).encode("utf-8")
 
     file_name = os.path.basename(file_path)
+    # Telegram сам определит тип по расширению — отдаём octet-stream.
     file_head = (
         f"--{boundary}\r\n"
         f"Content-Disposition: form-data; name=\"document\"; filename=\"{file_name}\"\r\n"
-        f"Content-Type: text/csv; charset=utf-8\r\n\r\n"
+        f"Content-Type: application/octet-stream\r\n\r\n"
     ).encode("utf-8")
 
     with open(file_path, "rb") as f:
@@ -217,7 +218,7 @@ def build_preview(csv_path: str, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
-def notify(csv_path: str, source_label: str = "") -> None:
+def notify(csv_path: str, source_label: str = "", xlsx_path: str = "") -> None:
     token = os.getenv("TG_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TG_CHAT_ID", "").strip()
     if not token or not chat_id:
@@ -234,7 +235,12 @@ def notify(csv_path: str, source_label: str = "") -> None:
     # 2. Превью отдельным сообщением (его длина может перевалить лимит caption)
     if preview:
         send_message(token, chat_id, preview)
-    # 3. Сам CSV-файл
+    # 3. CSV
     send_document(token, chat_id, csv_path,
                   caption=f"📁 {os.path.basename(csv_path)}", parse_mode="HTML")
+    # 4. XLSX (если построен) — отдельным документом, удобнее для отдела продаж
+    if xlsx_path and os.path.exists(xlsx_path):
+        send_document(token, chat_id, xlsx_path,
+                      caption=f"📊 {os.path.basename(xlsx_path)} — структура по городам",
+                      parse_mode="HTML")
     print("[telegram] готово")

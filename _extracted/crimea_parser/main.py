@@ -82,10 +82,20 @@ async def main():
         print("[email_finder] SKIP_ENRICHMENT=1 — пропускаем")
 
     final_csv = enriched or latest
+
+    # XLSX-отчёт со вкладками по городам
+    xlsx_path = ""
+    if os.path.exists(final_csv):
+        try:
+            from utils.excel_export import build_xlsx
+            xlsx_path = build_xlsx(final_csv) or ""
+        except Exception as e:
+            print(f"[xlsx] ошибка: {e}")
+
     auto_notify = os.getenv("AUTO_NOTIFY", "1").lower() not in ("0", "false", "")
     if auto_notify and os.path.exists(final_csv):
         try:
-            tg_notify(final_csv, source_label="weekly run")
+            tg_notify(final_csv, source_label="weekly run", xlsx_path=xlsx_path)
         except Exception as e:
             print(f"[telegram] критическая ошибка отчётности: {e}")
     elif not auto_notify:
