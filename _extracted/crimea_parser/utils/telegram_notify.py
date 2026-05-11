@@ -218,6 +218,31 @@ def build_preview(csv_path: str, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
+def checkpoint(label: str, added: int, total: int, elapsed_sec: int,
+                extra: str = "") -> None:
+    """Короткое сообщение «✅ {label}: +{added}, всего {total} (за {elapsed})»."""
+    token = os.getenv("TG_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TG_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        return
+    if elapsed_sec < 60:
+        elapsed = f"{elapsed_sec}с"
+    elif elapsed_sec < 3600:
+        elapsed = f"{elapsed_sec // 60}м {elapsed_sec % 60}с"
+    else:
+        elapsed = f"{elapsed_sec // 3600}ч {(elapsed_sec % 3600) // 60}м"
+    text = (
+        f"✅ <b>{html.escape(label)}</b>: +{added} "
+        f"(всего в прогоне: <b>{total}</b>, за {elapsed})"
+    )
+    if extra:
+        text += f"\n{html.escape(extra)}"
+    try:
+        send_message(token, chat_id, text)
+    except Exception as e:
+        print(f"[telegram checkpoint] err: {e}")
+
+
 def notify(csv_path: str, source_label: str = "", xlsx_path: str = "") -> None:
     token = os.getenv("TG_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TG_CHAT_ID", "").strip()

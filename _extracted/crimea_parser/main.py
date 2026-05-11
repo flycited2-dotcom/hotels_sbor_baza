@@ -8,9 +8,9 @@ from playwright.async_api import async_playwright
 load_dotenv()
 from utils.browser import create_browser_context
 from utils.storage import total, get_output_file, cross_source_merge
-from utils.telegram_notify import notify as tg_notify
+from utils.telegram_notify import notify as tg_notify, checkpoint as tg_checkpoint
 from utils import progress
-from parsers import osm, wikidata, yandex_maps, search_engine, avito, sutochno, ostrovok, twogis
+from parsers import osm, wikidata, yandex_maps, search_engine, avito, sutochno, ostrovok, twogis, crawler
 from parsers.email_finder import run_enrichment
 
 
@@ -24,6 +24,8 @@ RUNNERS = [
     ("Авито",                          avito.run,         "avito"),
     ("Суточно.ру",                     sutochno.run,      "sutochno"),
     ("Ostrovok",                       ostrovok.run,      "ostrovok"),
+    # Crawler идёт последним — он опирается на уже собранные website
+    ("Crawler",                        crawler.run,       "crawler"),
 ]
 
 
@@ -51,19 +53,37 @@ async def main():
     print(f"Источники: {[r[0] for r in runners]}")
 
     progress.mark_started()
+    import time
+    from utils.storage import total as storage_total
 
     async with async_playwright() as p:
         browser, context = await create_browser_context(p, headless=headless)
         try:
             for label, runner, _key in runners:
                 progress.mark_stage(label)
+                stage_started = time.monotonic()
+                count_before = storage_total()
                 try:
                     await runner(context)
                     progress.mark_completed_source(label)
+                    added = storage_total() - count_before
+                    elapsed = int(time.monotonic() - stage_started)
+                    try:
+                        tg_checkpoint(label, added, storage_total(), elapsed)
+                    except Exception as e:
+                        print(f"[checkpoint] err: {e}")
                 except Exception as e:
                     print(f"\n[{label}] критическая ошибка: {e}")
                     import traceback
                     traceback.print_exc()
+                    try:
+                        from utils.telegram_notify import send_message
+                        tok = os.environ.get("TG_BOT_TOKEN", "")
+                        chat = os.environ.get("TG_CHAT_ID", "")
+                        if tok and chat:
+                            send_message(tok, chat, f"⚠️ <b>{label}</b>: ошибка — <code>{str(e)[:200]}</code>")
+                    except Exception:
+                        pass
         finally:
             await browser.close()
 

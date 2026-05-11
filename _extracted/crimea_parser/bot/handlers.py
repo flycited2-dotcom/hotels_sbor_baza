@@ -29,7 +29,7 @@ def cmd_help(token: str, chat_id: int, user_id: int, args: str) -> None:
         "Только для админа:\n"
         "  /run — запустить полный прогон\n"
         "  /stop — остановить текущий прогон\n"
-        "  /run_source &lt;ключ&gt; — точечный запуск (osm/wikidata/yandex/search/2gis/avito/sutochno/ostrovok)\n"
+        "  /run_source &lt;ключ&gt; — точечный запуск (osm/wikidata/yandex/search/2gis/avito/sutochno/ostrovok/crawler)\n"
     )
     send_message(token, str(chat_id), text)
 
@@ -147,7 +147,7 @@ def cmd_run_source(token: str, chat_id: int, user_id: int, args: str) -> None:
         send_message(token, str(chat_id), "⛔ Только для админа.")
         return
     key = args.strip().lower()
-    allowed = {"osm", "wikidata", "yandex", "search", "2gis", "avito", "sutochno", "ostrovok"}
+    allowed = {"osm", "wikidata", "yandex", "search", "2gis", "avito", "sutochno", "ostrovok", "crawler"}
     if key not in allowed:
         send_message(token, str(chat_id), f"Неизвестный источник. Доступно: {', '.join(sorted(allowed))}.")
         return

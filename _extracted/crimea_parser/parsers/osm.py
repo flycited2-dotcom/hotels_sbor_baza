@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
 from utils.storage import save_item
+from utils.geo_city import detect_city_by_coords
 
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
@@ -73,7 +74,8 @@ def _normalize_phone(raw: str) -> str:
     return f"+7 ({digits[1:4]}) {digits[4:7]}-{digits[7:9]}-{digits[9:11]}"
 
 
-def _detect_city(tags: dict) -> str:
+def _detect_city(tags: dict, lat: float | None = None, lon: float | None = None) -> str:
+    # 1. addr:city / town / village / hamlet
     for k in ("addr:city", "addr:town", "addr:village", "addr:hamlet"):
         v = tags.get(k)
         if v:
@@ -81,10 +83,16 @@ def _detect_city(tags: dict) -> str:
                 if c.lower() in v.lower():
                     return c
             return v
+    # 2. полный адрес как строка
     addr_full = tags.get("addr:full") or tags.get("address") or ""
     for c in CITY_HINTS:
         if c in addr_full:
             return c
+    # 3. фоллбек на координаты (bbox-таблица)
+    by_coords = detect_city_by_coords(lat, lon)
+    if by_coords:
+        return by_coords
+    # 4. ничего не сработало — общий регион
     return "Крым"
 
 
@@ -174,8 +182,14 @@ async def run(context):
         name = tags.get("name") or tags.get("name:ru") or tags.get("operator") or ""
         if not name:
             continue
+        # координаты: для node — lat/lon на верхнем уровне, для way/relation — center.lat/center.lon
+        lat = el.get("lat")
+        lon = el.get("lon")
+        if lat is None and "center" in el:
+            lat = el["center"].get("lat")
+            lon = el["center"].get("lon")
         item = {
-            "city": _detect_city(tags),
+            "city": _detect_city(tags, lat, lon),
             "name": name,
             "address": _build_address(tags),
             "phone": _phone(tags),
