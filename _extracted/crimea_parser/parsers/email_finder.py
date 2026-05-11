@@ -372,46 +372,7 @@ async def run_enrichment(input_csv: str):
         not r.get("email") or not r.get("phone") or not r.get("address") or not r.get("social", ""))]
     print(f"\n=== Email Finder: {len(targets)}/{len(rows)} объектов на обогащение ===")
 
-    async with async_playwright() as p:
-        browser, context = await create_browser_context(p, headless=True)
-        page = await context.new_page()
-
-        for i, row in enumerate(rows):
-            if not row.get("website"):
-                continue
-            need_email = not row.get("email")
-            need_phone = not row.get("phone")
-            need_addr = not row.get("address")
-            need_social = not row.get("social", "")
-            if not (need_email or need_phone or need_addr or need_social):
-                continue
-
-            print(f"  [{i + 1}/{len(rows)}] {row.get('name','?')} → {row['website']}")
-            try:
-                email, phone, address, social = await enrich_from_website(page, row["website"])
-            except Exception as e:
-                print(f"    ошибка: {e}")
-                email = phone = address = social = ""
-
-            if need_email and email:
-                row["email"] = email
-                print(f"    email: {email}")
-            if need_phone and phone:
-                row["phone"] = phone
-                print(f"    phone: {phone}")
-            if need_addr and address:
-                row["address"] = address
-                print(f"    address: {address}")
-            if need_social and social:
-                row["social"] = social
-                print(f"    social: {social}")
-
-            await asyncio.sleep(random.uniform(1.2, 2.5))
-
-        await browser.close()
-
-    os.makedirs("output", exist_ok=True)
-    # Подбираем client_type для строк, у которых его нет (старые CSV без этой колонки)
+    # Заранее подбираем client_type для строк без него (CSV из старой схемы).
     try:
         from utils.categories import normalize as _norm_cat
         for r in rows:
@@ -420,14 +381,79 @@ async def run_enrichment(input_csv: str):
     except Exception:
         pass
 
-    with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=FIELDS,
-            delimiter=CSV_DELIMITER, quoting=csv.QUOTE_ALL,
-            extrasaction="ignore", restval="",
-        )
-        writer.writeheader()
-        writer.writerows(rows)
+    os.makedirs("output", exist_ok=True)
+
+    def _flush_csv() -> None:
+        """Полный rewrite файла — атомарно через tmp + rename, чтобы при kill -9
+        не остался полуписаный CSV. Вызывается каждые N обработанных строк
+        и в финальном finally."""
+        tmp = OUTPUT_FILE + ".tmp"
+        with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=FIELDS,
+                delimiter=CSV_DELIMITER, quoting=csv.QUOTE_ALL,
+                extrasaction="ignore", restval="",
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(tmp, OUTPUT_FILE)
+
+    # Сразу делаем стартовый flush — даже если процесс умрёт на первом сайте,
+    # файл существует и пригоден к чтению.
+    _flush_csv()
+
+    processed_since_flush = 0
+    FLUSH_EVERY = 25  # каждые ~25 сайтов сохраняем прогресс на диск
+
+    try:
+        async with async_playwright() as p:
+            browser, context = await create_browser_context(p, headless=True)
+            page = await context.new_page()
+
+            for i, row in enumerate(rows):
+                if not row.get("website"):
+                    continue
+                need_email = not row.get("email")
+                need_phone = not row.get("phone")
+                need_addr = not row.get("address")
+                need_social = not row.get("social", "")
+                if not (need_email or need_phone or need_addr or need_social):
+                    continue
+
+                print(f"  [{i + 1}/{len(rows)}] {row.get('name','?')} → {row['website']}")
+                try:
+                    email, phone, address, social = await enrich_from_website(page, row["website"])
+                except Exception as e:
+                    print(f"    ошибка: {e}")
+                    email = phone = address = social = ""
+
+                if need_email and email:
+                    row["email"] = email
+                    print(f"    email: {email}")
+                if need_phone and phone:
+                    row["phone"] = phone
+                    print(f"    phone: {phone}")
+                if need_addr and address:
+                    row["address"] = address
+                    print(f"    address: {address}")
+                if need_social and social:
+                    row["social"] = social
+                    print(f"    social: {social}")
+
+                processed_since_flush += 1
+                if processed_since_flush >= FLUSH_EVERY:
+                    _flush_csv()
+                    processed_since_flush = 0
+
+                await asyncio.sleep(random.uniform(1.2, 2.5))
+
+            await browser.close()
+    finally:
+        # Гарантированный финальный flush — даже если поймали Exception или TERM.
+        try:
+            _flush_csv()
+        except Exception as e:
+            print(f"[email_finder] финальный flush упал: {e}")
 
     print(f"\n✅ Обогащённый файл: {OUTPUT_FILE}")
     return OUTPUT_FILE

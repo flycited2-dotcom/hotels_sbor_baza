@@ -9,6 +9,7 @@ load_dotenv()
 from utils.browser import create_browser_context
 from utils.storage import total, get_output_file, cross_source_merge
 from utils.telegram_notify import notify as tg_notify
+from utils import progress
 from parsers import osm, wikidata, yandex_maps, search_engine, avito, sutochno, ostrovok, twogis
 from parsers.email_finder import run_enrichment
 
@@ -49,12 +50,16 @@ async def main():
           f"SKIP_ENRICHMENT: {skip_enrichment}")
     print(f"Источники: {[r[0] for r in runners]}")
 
+    progress.mark_started()
+
     async with async_playwright() as p:
         browser, context = await create_browser_context(p, headless=headless)
         try:
             for label, runner, _key in runners:
+                progress.mark_stage(label)
                 try:
                     await runner(context)
+                    progress.mark_completed_source(label)
                 except Exception as e:
                     print(f"\n[{label}] критическая ошибка: {e}")
                     import traceback
@@ -62,6 +67,7 @@ async def main():
         finally:
             await browser.close()
 
+    progress.mark_stage("cross_source_merge")
     print(f"\n✅ Собрано записей: {total()}")
 
     # Cross-source merge — подтягиваем недостающие phone/email/website
@@ -81,8 +87,10 @@ async def main():
     elif skip_enrichment:
         print("[email_finder] SKIP_ENRICHMENT=1 — пропускаем")
 
+    progress.mark_stage("email_finder")
     final_csv = enriched or latest
 
+    progress.mark_stage("xlsx")
     # XLSX-отчёт со вкладками по городам
     xlsx_path = ""
     if os.path.exists(final_csv):
@@ -101,8 +109,16 @@ async def main():
     elif not auto_notify:
         print("[telegram] AUTO_NOTIFY=0, отчёт не отправлен (отдельный планировщик)")
 
+    progress.mark_finished("ok")
     print("\n🎉 Всё готово! Смотри папку output/")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        progress.mark_failed("KeyboardInterrupt")
+        raise
+    except Exception as e:
+        progress.mark_failed(str(e))
+        raise

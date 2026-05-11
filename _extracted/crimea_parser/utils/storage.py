@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 
 from utils.categories import normalize as normalize_category
+from utils import dedup, progress
 
 FIELDS = [
     "city", "name", "client_type", "category",
@@ -49,8 +50,16 @@ def _key(item):
 
 def save_item(item):
     global _rows
+    if not item.get("name"):
+        return False
     k = _key(item)
-    if k in _seen or not item.get("name"):
+    # in-memory дубль внутри текущего процесса
+    if k in _seen:
+        return False
+    # persistent дубль через SQLite — переживает рестарт парсера
+    if not dedup.mark_seen(item.get("name", ""), item.get("city", ""),
+                            item.get("source", "")):
+        _seen.add(k)
         return False
     _seen.add(k)
 
@@ -62,6 +71,12 @@ def save_item(item):
 
     _rows.append(cleaned)
     _flush()
+    # обновляем счётчик в progress.json раз в 10 записей (чтобы не перегружать диск)
+    if len(_rows) % 10 == 0:
+        try:
+            progress.mark_count(len(_rows))
+        except Exception:
+            pass
     print(f"  ✓ [{cleaned['source']}] {cleaned['city']} | {cleaned['name']} | "
           f"{cleaned.get('phone') or '—'} | {cleaned.get('email') or '—'}")
     return True

@@ -168,11 +168,72 @@ Environment=PYTHONUNBUFFERED=1
 Environment=HEADLESS=0
 ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x1024x24" $VENV_PYTHON $DEPLOY_DIR/main.py
 TimeoutStartSec=12h
+MemoryMax=3G
+MemoryHigh=2500M
+OOMPolicy=stop
 StandardOutput=append:$DEPLOY_DIR/parser.log
 StandardError=append:$DEPLOY_DIR/parser_error.log
 EOF
 
 ok "Systemd сервис создан: $SYSTEMD_SERVICE"
+
+# ── 11a. СОЗДАНИЕ BOT-СЕРВИСА (long-poll Telegram) ───────────
+SYSTEMD_BOT_UNIT="/etc/systemd/system/crimea_bot.service"
+log "Создание bot юнита..."
+
+$SUDO tee "$SYSTEMD_BOT_UNIT" > /dev/null <<EOF
+[Unit]
+Description=Crimea Hotel Parser — Telegram control bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$DEPLOY_DIR
+Environment=PYTHONUNBUFFERED=1
+ExecStart=$VENV_PYTHON $DEPLOY_DIR/bot/main.py
+Restart=always
+RestartSec=10
+StandardOutput=append:$DEPLOY_DIR/bot.log
+StandardError=append:$DEPLOY_DIR/bot.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+ok "Bot юнит создан: $SYSTEMD_BOT_UNIT"
+
+# ── 11d. WATCHDOG: алерт если парсер завис ──────────────────
+SYSTEMD_WD_UNIT="/etc/systemd/system/crimea_watchdog.service"
+SYSTEMD_WD_TIMER="/etc/systemd/system/crimea_watchdog.timer"
+log "Создание watchdog..."
+
+$SUDO tee "$SYSTEMD_WD_UNIT" > /dev/null <<EOF
+[Unit]
+Description=Crimea Parser Watchdog (alert if hung)
+
+[Service]
+Type=oneshot
+WorkingDirectory=$DEPLOY_DIR
+ExecStart=/bin/bash $DEPLOY_DIR/watchdog.sh
+EOF
+
+$SUDO tee "$SYSTEMD_WD_TIMER" > /dev/null <<EOF
+[Unit]
+Description=Crimea Parser Watchdog timer (every 10 min)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+Unit=crimea_watchdog.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+chmod +x $DEPLOY_DIR/watchdog.sh
+ok "Watchdog создан"
 
 # ── 11b. СОЗДАНИЕ SYSTEMD-ЮНИТА ДЛЯ EMAIL FINDER ─────────────
 SYSTEMD_EMAIL_UNIT="/etc/systemd/system/crimea_email_finder.service"
@@ -190,7 +251,7 @@ User=$USER
 WorkingDirectory=$DEPLOY_DIR
 Environment=PYTHONUNBUFFERED=1
 ExecStart=$VENV_PYTHON $DEPLOY_DIR/run_email_finder.py
-TimeoutStartSec=4h
+TimeoutStartSec=12h
 StandardOutput=append:$DEPLOY_DIR/email_finder.log
 StandardError=append:$DEPLOY_DIR/email_finder.log
 EOF
@@ -244,7 +305,9 @@ EOF
 
 $SUDO systemctl daemon-reload
 $SUDO systemctl enable --now ${SERVICE_NAME}.timer
-ok "Таймер активирован: вс 03:00"
+$SUDO systemctl enable --now crimea_bot.service
+$SUDO systemctl enable --now crimea_watchdog.timer
+ok "Таймер активирован: вс 03:00, бот и watchdog включены"
 
 # ── 13. СОЗДАНИЕ СКРИПТА РУЧНОГО ЗАПУСКА ─────────────────────
 cat > "$DEPLOY_DIR/run.sh" <<EOF
