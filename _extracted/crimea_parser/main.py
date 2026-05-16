@@ -10,14 +10,22 @@ from utils.browser import create_browser_context
 from utils.storage import total, get_output_file, cross_source_merge
 from utils.telegram_notify import notify as tg_notify, checkpoint as tg_checkpoint
 from utils import progress
-from parsers import osm, wikidata, yandex_maps, search_engine, avito, sutochno, ostrovok, twogis, crawler
+from parsers import (
+    osm, wikidata, wikipedia, gosreestr, vk_groups,
+    yandex_maps, search_engine, avito, sutochno, ostrovok, twogis, crawler,
+)
 from parsers.email_finder import run_enrichment
 
 
 # (label, runner, key) — key используется в env ONLY_SOURCE для точечного запуска.
 RUNNERS = [
+    # Быстрые HTTP-API источники сначала
     ("OSM",                            osm.run,           "osm"),
     ("Wikidata",                       wikidata.run,      "wikidata"),
+    ("Wikipedia",                      wikipedia.run,     "wikipedia"),
+    ("Госреестр Минэка",               gosreestr.run,     "gosreestr"),
+    ("VK Groups",                      vk_groups.run,     "vk"),
+    # Тяжёлые Chromium-источники
     ("Я.Карты",                        yandex_maps.run,   "yandex"),
     ("Поиск (Яндекс/Mail/Rambler/Bing)", search_engine.run, "search"),
     ("2ГИС",                           twogis.run,        "2gis"),
