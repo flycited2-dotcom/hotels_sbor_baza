@@ -14,6 +14,8 @@ import json
 import os
 import random
 import re
+import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -56,20 +58,44 @@ CONTACT_PATHS = [
     "/contacts", "/contact", "/contact-us", "/contact_us",
     "/kontakty", "/kontakt", "/contacts.html", "/contact.html",
     "/o-nas", "/o_nas", "/about", "/about-us", "/about_us",
+    "/o-kompanii", "/o_kompanii",
     "/page/contact", "/page/contacts", "/feedback", "/info",
+    "/obratnaya-svyaz", "/obratnaya_svyaz",
     "/svyazatsya", "/связаться", "/контакты", "/о-нас",
     "/index.php?route=information/contact",
     "/info/contacts", "/cms/contacts",
     # Hotel-specific
     "/booking", "/reservation", "/reservations", "/book",
+    "/reserve", "/bronirovat", "/zabronirovat",
     "/cooperation", "/partners", "/agents", "/info-hotel",
-    "/rezervirovanie", "/zabronirovat", "/бронирование",
+    "/rezervirovanie", "/бронирование",
+    # Pricing pages (often contain contact info)
+    "/price", "/prices", "/tseny",
 ]
 
 SOCIAL_HOSTS = (
     "vk.com", "vk.ru", "t.me", "telegram.me", "telegram.org",
     "instagram.com", "ok.ru", "facebook.com", "wa.me", "whatsapp.com",
 )
+
+_SITEMAP_CONTACT_KW = {"contact", "about", "kontakt", "kontakty", "feedback", "obratnaya"}
+
+
+def _get_sitemap_contact_urls(base_url: str, limit: int = 5) -> list[str]:
+    """Extract up to `limit` contact-looking URLs from sitemap.xml."""
+    try:
+        url = f"{base_url.rstrip('/')}/sitemap.xml"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status != 200:
+                return []
+            text = resp.read().decode("utf-8", errors="replace")
+        root = ET.fromstring(text)
+        ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+        urls = [loc.text for loc in root.findall(".//sm:loc", ns) if loc.text]
+        return [u for u in urls if any(kw in u.lower() for kw in _SITEMAP_CONTACT_KW)][:limit]
+    except Exception:
+        return []
 
 
 def _decode_obfuscated_email(text: str) -> str:
@@ -322,12 +348,17 @@ async def enrich_from_website(page, website: str) -> tuple[str, str, str, str]:
         social = social or s
 
         if not (email and phone and address):
-            for path in CONTACT_PATHS:
+            # Build pages-to-visit list: standard paths + sitemap contact URLs
+            base_url = website.rstrip("/")
+            pages_to_visit: list[str] = [base_url + p for p in CONTACT_PATHS]
+            sitemap_urls = _get_sitemap_contact_urls(base_url)
+            pages_to_visit.extend(u for u in sitemap_urls if u not in pages_to_visit)
+
+            for page_url in pages_to_visit:
                 if email and phone and address:
                     break
                 try:
-                    await page.goto(website.rstrip("/") + path,
-                                    wait_until="domcontentloaded", timeout=10000)
+                    await page.goto(page_url, wait_until="domcontentloaded", timeout=10000)
                     await page.wait_for_timeout(1000)
                     await _scroll_to_bottom(page, n=2)
                     e, p, a, s = await _harvest_page(page, site_domain)
