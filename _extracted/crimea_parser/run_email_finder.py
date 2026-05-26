@@ -53,6 +53,20 @@ async def main() -> None:
         except Exception as e:
             print(f"[telegram] {e}")
 
+    # Auto-upload master CSV/XLSX to Google Drive (if GDRIVE_FOLDER_ID is set)
+    if os.getenv("GDRIVE_FOLDER_ID"):
+        try:
+            from utils.merger import build_master_xlsx
+            from utils.gdrive import upload_file
+            master_csv, master_xlsx = build_master_xlsx()
+            upload_file(master_csv)
+            if master_xlsx and os.path.exists(master_xlsx):
+                upload_file(master_xlsx)
+            if enriched and os.path.exists(enriched):
+                upload_file(enriched)
+        except Exception as e:
+            print(f"[gdrive] {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -137,6 +137,18 @@ async def main():
     elif not auto_notify:
         print("[telegram] AUTO_NOTIFY=0, отчёт не отправлен (отдельный планировщик)")
 
+    # Auto-upload master CSV/XLSX to Google Drive (if GDRIVE_FOLDER_ID is set)
+    if os.getenv("GDRIVE_FOLDER_ID"):
+        try:
+            from utils.merger import build_master_xlsx
+            from utils.gdrive import upload_file
+            master_csv, master_xlsx = build_master_xlsx()
+            upload_file(master_csv)
+            if master_xlsx and os.path.exists(master_xlsx):
+                upload_file(master_xlsx)
+        except Exception as e:
+            print(f"[gdrive] {e}")
+
     progress.mark_finished("ok")
     print("\n🎉 Всё готово! Смотри папку output/")
 
