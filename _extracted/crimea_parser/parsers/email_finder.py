@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 from playwright.async_api import async_playwright
 
 from parsers.site_finder import find_website
+from parsers.vk_email import extract_email_from_vk
 from utils.browser import create_browser_context
 from utils.storage import CSV_DELIMITER, FIELDS, normalize_phone
 
@@ -476,6 +477,16 @@ async def run_enrichment(input_csv: str):
                 if need_social and social:
                     row["social"] = social
                     print(f"    social: {social}")
+
+                # VK fallback: if no email found yet and record has a VK social link
+                if not row.get("email") and "vk.com" in (row.get("social") or ""):
+                    try:
+                        vk_email = extract_email_from_vk(row["social"])
+                        if vk_email:
+                            row["email"] = vk_email
+                            print(f"[vk_email] {row.get('name')} → {vk_email}")
+                    except Exception:
+                        pass
 
                 processed_since_flush += 1
                 if processed_since_flush >= FLUSH_EVERY:
