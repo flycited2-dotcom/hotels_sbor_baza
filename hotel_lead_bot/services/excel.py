@@ -67,6 +67,57 @@ def _leads_to_rows(leads: list) -> list:
     return rows
 
 
+MIN_CITY_ROWS = 10
+
+
+def _safe_sheet_name(name: str) -> str:
+    for ch in r'\/*?:[]':
+        name = name.replace(ch, '_')
+    return name[:31]
+
+
+def _write_leads_sheet(ws, leads: list, headers: list) -> None:
+    header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True, size=10)
+    thin = Side(style="thin", color="CCCCCC")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    ws.row_dimensions[1].height = 30
+    for col_num, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_num, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = border
+    ws.freeze_panes = "A2"
+    rows = _leads_to_rows(leads)
+    for row_num, row_data in enumerate(rows, 2):
+        for col_num, value in enumerate(row_data, 1):
+            ws.cell(row=row_num, column=col_num, value=value)
+        _style_data_row(ws, row_num, len(headers))
+    ws.auto_filter.ref = ws.dimensions
+    _set_column_widths(ws)
+
+
+def _build_city_sheets(wb, leads: list, headers: list) -> None:
+    from collections import defaultdict
+    by_city: dict = defaultdict(list)
+    for lead in leads:
+        city = (lead.get("city") or "Не указан").strip() or "Не указан"
+        by_city[city].append(lead)
+
+    others: list = []
+    for city in sorted(by_city.keys(), key=lambda c: -len(by_city[c])):
+        if len(by_city[city]) < MIN_CITY_ROWS:
+            others.extend(by_city[city])
+            continue
+        ws = wb.create_sheet(_safe_sheet_name(city))
+        _write_leads_sheet(ws, by_city[city], headers)
+
+    if others:
+        ws = wb.create_sheet("Остальные")
+        _write_leads_sheet(ws, others, headers)
+
+
 def _build_workbook(leads: list, sheet_title: str) -> openpyxl.Workbook:
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -84,6 +135,7 @@ def _build_workbook(leads: list, sheet_title: str) -> openpyxl.Workbook:
     ws.auto_filter.ref = ws.dimensions
     ws.freeze_panes = "A2"
     _set_column_widths(ws)
+    _build_city_sheets(wb, leads, EXCEL_HEADERS)
     return wb
 
 
