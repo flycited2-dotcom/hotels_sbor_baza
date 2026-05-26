@@ -242,18 +242,28 @@ def build_xlsx(csv_path: str, xlsx_path: str | None = None) -> str | None:
     ws_all = wb.create_sheet("Все")
     _write_sheet(ws_all, rows)
 
-    # Группа по городам — отдельный лист на каждый
+    # Группа по городам — отдельный лист на каждый; мелкие города → «Остальные»
+    MIN_CITY_ROWS = 10
+
     by_city: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         city = (r.get("city") or "Не указан").strip() or "Не указан"
         by_city[city].append(r)
 
+    others: list[dict] = []
     for city in sorted(by_city.keys(), key=lambda c: -len(by_city[c])):
+        if len(by_city[city]) < MIN_CITY_ROWS:
+            others.extend(by_city[city])
+            continue
         sheet_name = _safe_sheet_name(city)
         if sheet_name in wb.sheetnames:
             sheet_name = _safe_sheet_name(f"{city}_2")
         ws = wb.create_sheet(sheet_name)
         _write_sheet(ws, by_city[city])
+
+    if others:
+        ws_others = wb.create_sheet("Остальные")
+        _write_sheet(ws_others, others)
 
     # Без контактов
     no_contacts = [r for r in rows
