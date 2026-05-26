@@ -62,7 +62,7 @@ def build_master(output_dir: str = OUTPUT_DIR) -> str:
     with open(master_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(
             f, fieldnames=FIELDNAMES, delimiter=";",
-            extrasaction="ignore", restval="",
+            extrasaction="ignore", restval="", quoting=csv.QUOTE_ALL,
         )
         writer.writeheader()
         writer.writerows(rows)
