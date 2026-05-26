@@ -1,4 +1,5 @@
 """Все команды бота. По 5-15 строк на хендлер — компактно и читаемо."""
+import glob
 import html
 import logging
 import os
@@ -6,7 +7,8 @@ import re
 
 from aiogram import Router, F
 from aiogram.filters import Command, CommandObject
-from aiogram.types import FSInputFile, Message
+from aiogram.types import (CallbackQuery, FSInputFile,
+                            InlineKeyboardButton, InlineKeyboardMarkup, Message)
 
 
 def esc(s: str) -> str:
@@ -16,7 +18,7 @@ def esc(s: str) -> str:
     """
     return html.escape(s or "", quote=False)
 
-from services.auth import is_admin
+from services.auth import ADMIN_IDS, is_admin
 from services.csv_finder import (csv_summary, latest_csv, latest_enriched,
                                   latest_xlsx)
 from services.systemd import (EMAILS_UNIT, PARSER_TIMER, PARSER_UNIT, _run,
@@ -52,7 +54,9 @@ async def cmd_help(m: Message) -> None:
         "<b>Файлы</b>\n"
         "/csv — последний result_*.csv\n"
         "/csv_enriched — последний result_enriched_*.csv\n"
-        "/xlsx — последний result_*.xlsx\n\n"
+        "/xlsx — последний result_*.xlsx\n"
+        "/reports — список последних файлов output/ для скачивания\n"
+        "/master — мастер-файл из всех прогонов\n\n"
         "<b>Расписание</b>\n"
         "/timer_on — включить еженедельный запуск\n"
         "/timer_off — отключить\n"
@@ -110,6 +114,60 @@ async def cmd_stop(m: Message) -> None:
     else:
         await m.answer(f"❌ systemctl stop: rc={code}\n<pre>{esc(out)}</pre>",
                        parse_mode="HTML")
+
+
+_OUTPUT_DIR = "/home/crimea_parser/output"
+
+
+@router.message(Command("reports"))
+async def cmd_reports(m: Message) -> None:
+    files = sorted(
+        glob.glob(os.path.join(_OUTPUT_DIR, "*.csv")) +
+        glob.glob(os.path.join(_OUTPUT_DIR, "*.xlsx")),
+        key=os.path.getmtime,
+        reverse=True,
+    )[:10]
+    if not files:
+        await m.answer("Нет файлов в output/")
+        return
+    buttons = []
+    for f in files:
+        name = os.path.basename(f)
+        size_kb = os.path.getsize(f) // 1024
+        buttons.append([InlineKeyboardButton(text=f"📄 {name} ({size_kb} KB)",
+                                              callback_data=f"dl:{name}")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await m.answer("Выберите файл:", reply_markup=kb)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("dl:"))
+async def cb_download_file(callback: CallbackQuery) -> None:
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    name = os.path.basename(callback.data[3:])  # sanitize: strip any path component
+    path = os.path.join(_OUTPUT_DIR, name)
+    if not os.path.exists(path):
+        await callback.message.answer(f"Файл не найден: {esc(name)}")
+        await callback.answer()
+        return
+    await callback.message.answer_document(FSInputFile(path), caption=f"📎 {esc(name)}")
+    await callback.answer()
+
+
+@router.message(Command("master"))
+async def cmd_master(m: Message) -> None:
+    await m.answer("⏳ Собираю мастер-файл…")
+    try:
+        import sys
+        sys.path.insert(0, "/home/crimea_parser")
+        from utils.merger import build_master_xlsx  # type: ignore[import]
+        csv_path, xlsx_path = build_master_xlsx()
+        await m.answer_document(FSInputFile(csv_path), caption="📊 master_all.csv")
+        if xlsx_path and os.path.exists(xlsx_path):
+            await m.answer_document(FSInputFile(xlsx_path), caption="📊 master_all.xlsx")
+    except Exception as e:
+        await m.answer(f"❌ Ошибка: {esc(str(e))}")
 
 
 _STAGE_RE = re.compile(r"===\s*([^=]+?)\s*===")
