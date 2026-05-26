@@ -143,7 +143,8 @@ async def main():
             from utils.merger import build_master_xlsx
             from utils.gdrive import upload_file
             master_csv, master_xlsx = build_master_xlsx()
-            upload_file(master_csv)
+            if master_csv and os.path.exists(master_csv):
+                upload_file(master_csv)
             if master_xlsx and os.path.exists(master_xlsx):
                 upload_file(master_xlsx)
         except Exception as e:
