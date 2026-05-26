@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright
 
+from parsers.site_finder import find_website
 from utils.browser import create_browser_context
 from utils.storage import CSV_DELIMITER, FIELDS, normalize_phone
 
@@ -442,6 +443,11 @@ async def run_enrichment(input_csv: str):
             page = await context.new_page()
 
             for i, row in enumerate(rows):
+                if not (row.get("website") or "").strip():
+                    found = find_website(row.get("name", ""), row.get("city", ""))
+                    if found:
+                        row["website"] = found
+                        print(f"[site_finder] {row.get('name')} → {found}")
                 if not row.get("website"):
                     continue
                 need_email = not row.get("email")
