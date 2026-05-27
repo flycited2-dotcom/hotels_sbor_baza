@@ -31,13 +31,28 @@ def latest_unenriched_csv(output_dir: str) -> str | None:
 
 async def main() -> None:
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
-    latest = latest_unenriched_csv(output_dir)
-    if not latest:
-        print("Нет result_*.csv в output/ — нечего обогащать.")
-        return
+    master_path = os.path.join(output_dir, "master_all.csv")
 
-    print(f"Обогащаем: {latest}")
-    enriched = await run_enrichment(latest)
+    # ENRICH_LATEST=1 preserves old behavior (process only newest result_*.csv)
+    if os.getenv("ENRICH_LATEST", "0").lower() in ("1", "true"):
+        target = latest_unenriched_csv(output_dir)
+        if not target:
+            print("Нет result_*.csv в output/ — нечего обогащать.")
+            return
+    else:
+        # Default: build/use master_all.csv (all runs, deduplicated)
+        if not os.path.exists(master_path):
+            print("master_all.csv не найден — собираю из result_*.csv…")
+            try:
+                from utils.merger import build_master
+                master_path = build_master(output_dir)
+            except Exception as e:
+                print(f"[merger] {e}")
+                return
+        target = master_path
+
+    print(f"Обогащаем: {target}")
+    enriched = await run_enrichment(target)
 
     xlsx_path = ""
     if enriched:
@@ -53,13 +68,14 @@ async def main() -> None:
         except Exception as e:
             print(f"[telegram] {e}")
 
-    # Auto-upload master CSV/XLSX to Google Drive (if GDRIVE_FOLDER_ID is set)
+    # Auto-upload to Google Drive
     if os.getenv("GDRIVE_FOLDER_ID"):
         try:
             from utils.merger import build_master_xlsx
             from utils.gdrive import upload_file
             master_csv, master_xlsx = build_master_xlsx()
-            upload_file(master_csv)
+            if master_csv and os.path.exists(master_csv):
+                upload_file(master_csv)
             if master_xlsx and os.path.exists(master_xlsx):
                 upload_file(master_xlsx)
             if enriched and os.path.exists(enriched):
