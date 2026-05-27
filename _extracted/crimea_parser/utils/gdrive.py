@@ -1,58 +1,78 @@
-"""Upload files to Google Drive using a service account.
+"""Upload files to Google Drive using OAuth2 user credentials.
 
 Required env vars:
   GDRIVE_FOLDER_ID  — ID of the Drive folder to upload into
                       (last part of https://drive.google.com/drive/folders/<ID>)
-  GDRIVE_CREDENTIALS — path to service_account credentials.json
-                       (default: /opt/hotel_lead_bot/credentials.json)
+  GDRIVE_TOKEN      — path to token.json (default: /home/crimea_parser/token.json)
+                      Generated once by setup_gdrive_auth.py
 
 Setup (one-time):
-  1. In Google Cloud Console, enable Drive API for the service account project.
-  2. Share the target Drive folder with the service account email (Editor role).
-  3. Set GDRIVE_FOLDER_ID in .env.
+  1. In Google Cloud Console, enable Drive API.
+  2. Create OAuth2 Client ID (Desktop app), download client_secrets.json.
+  3. Run: python setup_gdrive_auth.py client_secrets.json
+  4. Upload the generated token.json to server at GDRIVE_TOKEN path.
+  5. Set GDRIVE_FOLDER_ID in .env.
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-_DEFAULT_CREDS = "/opt/hotel_lead_bot/credentials.json"
+_DEFAULT_TOKEN = "/home/crimea_parser/token.json"
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+
+
+def _get_service():
+    """Build authenticated Drive service using OAuth2 refresh token."""
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+
+    token_path = os.getenv("GDRIVE_TOKEN", _DEFAULT_TOKEN)
+    if not os.path.exists(token_path):
+        raise FileNotFoundError(
+            f"[gdrive] token.json not found: {token_path}. "
+            "Run setup_gdrive_auth.py first."
+        )
+
+    creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            with open(token_path, "w") as f:
+                f.write(creds.to_json())
+        else:
+            raise RuntimeError(
+                f"[gdrive] token expired or missing refresh_token. "
+                "Re-run setup_gdrive_auth.py to reauthorize."
+            )
+
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
 def upload_file(local_path: str, folder_id: str | None = None) -> str | None:
-    """
-    Upload a local file to Google Drive.
+    """Upload a local file to Google Drive.
+
     Returns the web view URL on success, None on failure.
-    If folder_id is not provided, reads GDRIVE_FOLDER_ID from env.
+    Updates existing file with same name in folder, or creates new.
     """
     folder_id = folder_id or os.getenv("GDRIVE_FOLDER_ID", "")
     if not folder_id:
         print("[gdrive] GDRIVE_FOLDER_ID not set — skipping upload")
         return None
 
-    creds_path = os.getenv("GDRIVE_CREDENTIALS", _DEFAULT_CREDS)
-    if not os.path.exists(creds_path):
-        print(f"[gdrive] credentials.json not found: {creds_path}")
-        return None
-
     try:
-        from google.oauth2 import service_account
-        from googleapiclient.discovery import build
         from googleapiclient.http import MediaFileUpload
 
-        creds = service_account.Credentials.from_service_account_file(
-            creds_path,
-            scopes=["https://www.googleapis.com/auth/drive.file"],
-        )
-        service = build("drive", "v3", credentials=creds, cache_discovery=False)
-
+        service = _get_service()
         file_name = Path(local_path).name
+
         if local_path.endswith(".xlsx"):
             mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         else:
             mime = "text/csv"
 
-        # Update existing file with same name in folder, or create new
         existing = (
             service.files()
             .list(
