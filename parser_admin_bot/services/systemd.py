@@ -24,7 +24,12 @@ async def _run(*args: str, timeout: float = 30.0) -> tuple[int, str]:
 
 
 async def systemctl(action: str, unit: str) -> tuple[int, str]:
-    return await _run("sudo", "-n", "systemctl", action, unit)
+    # `systemctl start` для oneshot-юнита блокируется до конца прогона (часы).
+    # --no-block возвращает управление сразу — иначе ловим timeout rc=124.
+    args = ["sudo", "-n", "systemctl", action, unit]
+    if action in ("start", "restart", "stop"):
+        args.append("--no-block")
+    return await _run(*args)
 
 
 async def is_active(unit: str) -> bool:

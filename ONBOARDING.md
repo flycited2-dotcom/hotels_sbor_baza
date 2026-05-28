@@ -2,237 +2,158 @@
 
 Парсер базы средств размещения по Крыму (отели, гостиницы, санатории, пансионаты,
 базы отдыха, эллинги, кемпинги, глэмпинги, гостевые дома, хостелы). Работает по
-расписанию, складывает CSV/XLSX, шлёт отчёты в Telegram, управляется ботом.
+расписанию, складывает CSV/XLSX, шлёт отчёты в Telegram, выгружает в Google Drive,
+управляется двумя ботами.
+
+> Последнее обновление: 2026-05-29. Текущая база: **11 993 записи**, email **2 019**, phone **3 218**.
 
 ---
 
 ## TL;DR
 
-**Куда смотреть в первую очередь:**
-
 | Файл / каталог | За что отвечает |
 |---|---|
-| `_extracted/crimea_parser/main.py` | Оркестратор — список `RUNNERS`, порядок источников, email_finder, отчёт |
-| `_extracted/crimea_parser/parsers/` | 12 источников данных (см. таблицу ниже) |
-| `_extracted/crimea_parser/bot/` | Telegram-бот (long-poll, команды управления) |
-| `_extracted/crimea_parser/utils/` | storage (CSV+dedup), progress, telegram_notify, browser, geo_city, excel_export |
-| `_extracted/crimea_parser/deploy.sh` | One-click деплой: venv, Chromium, systemd-юниты, watchdog, бот |
-| `_extracted/crimea_parser/watchdog.sh` | Алерты «завис»/«упал», heartbeat каждые 30 мин |
+| `_extracted/crimea_parser/main.py` | Оркестратор: список `RUNNERS` (12 источников), enrichment, merge, xlsx, gdrive, отчёт |
+| `_extracted/crimea_parser/parsers/` | 12 источников данных (таблица ниже) |
+| `_extracted/crimea_parser/utils/` | storage (CSV+dedup), merger (master_all), gdrive, excel_export, telegram_notify, progress, geo_city, categories |
+| `_extracted/crimea_parser/bot/` | Бот №1 «Hotel_Lead2_Bot» (stdlib long-poll) |
+| `parser_admin_bot/` | Бот №2 «АдминБотHotels» (aiogram) |
+| `_extracted/crimea_parser/run_email_finder.py` | Добор контактов по master_all без полного парсинга |
+| `_extracted/crimea_parser/run_vk.py` | Отдельный VK-добор (HTTP-only, без Chromium) |
 
-**Прод-сервер:** `root@212.116.115.150` (sprinthost, СПб, Ubuntu 24.04).
-Все файлы парсера — в `/home/crimea_parser/`. Креды — в `/home/crimea_parser/.env`.
+**Прод-сервер:** `root@212.116.115.150` (sprinthost, СПб, Ubuntu 24.04, **RAM 5.8 ГБ — мало!**).
+Файлы парсера: `/home/crimea_parser/`. Бот №2: `/root/parser_admin_bot/`. Секреты: `.env` (chmod 600).
 
----
-
-## Архитектура
-
-```
-┌──────────────────────┐    ┌─────────────────────────┐
-│ crimea_bot.service   │←──→│ crimea_parser.service   │
-│ long-poll Telegram   │    │ oneshot, 12 источников  │
-│ /run /stop /status   │    │ TimeoutStartSec=12h     │
-│ /sources /db /tail   │    │ MemoryMax=3G            │
-└──────────────────────┘    └─────────────────────────┘
-        │                              │
-        └─── читает state ─────────────┤
-                                       ▼
-            ┌────────────────────────────────────┐
-            │ /home/crimea_parser/output/        │
-            │   progress.json — текущее состоние │
-            │   dedup.db — SQLite UNIQUE base    │
-            │   result_*.csv / *_enriched_*.csv  │
-            └────────────────────────────────────┘
-                                       │
-                ┌──────────────────────┘
-                ▼
-        ┌──────────────────────┐
-        │ crimea_watchdog.timer│  каждые 10 мин:
-        │ (системный таймер)   │  — алерт если CSV не растёт > 30 мин
-        │                      │  — heartbeat каждые 30 мин
-        │                      │  — алерт при failed
-        └──────────────────────┘
-```
-
-Расписание: `crimea_parser.timer` срабатывает каждое **воскресенье 03:00 MSK**.
+> ⚠️ **RAM 5.8 ГБ** — нельзя запускать два Chromium одновременно (основной прогон + email_finder = OOM). VK-добор (HTTP) можно параллельно.
 
 ---
 
-## Источники данных (12 штук)
+## Источники данных (12)
 
-Порядок в `main.py` (быстрые HTTP-API сначала, тяжёлый Chromium потом):
+Порядок в `main.py` — быстрые HTTP-API сначала, тяжёлый Chromium потом, Crawler последним:
 
 | # | Источник | Тип | Файл | Статус |
 |---|---|---|---|---|
-| 1 | OSM Overpass | HTTP/JSON | `parsers/osm.py` | ✅ ~3600 объектов, реальные phone/email/website |
-| 2 | Wikidata SPARQL | HTTP/JSON | `parsers/wikidata.py` | ✅ ~10-15 крупных объектов |
-| 3 | Wikipedia (ru) | HTTP/JSON | `parsers/wikipedia.py` | ✅ ~80 объектов с infobox |
-| 4 | Госреестр Минэка | HTTP/JSON | `parsers/gosreestr.py` | ⏸ stub, нужен живой endpoint |
-| 5 | VK Groups | HTTP/JSON | `parsers/vk_groups.py` | ⏸ нужен `VK_TOKEN` в .env |
-| 6 | Я.Карты | Chromium | `parsers/yandex_maps.py` | ✅ ~1300 (с адресами, без phone) |
-| 7 | Поиск (Я/Mail/Rambler/Bing) | Chromium | `parsers/search_engine.py` | ✅ цепочка fallback, ~100-200 |
-| 8 | 2ГИС | Chromium | `parsers/twogis.py` | ⛔ блокирует Крым на 403 → /museum |
+| 1 | OSM Overpass | HTTP/JSON | `parsers/osm.py` | ✅ ~3760, phone/email/website из тегов, города по bbox (`utils/geo_city.py`) |
+| 2 | Wikidata SPARQL | HTTP/JSON | `parsers/wikidata.py` | ✅ ~10 (часто 429 — у Wikidata аварийный rate-limit) |
+| 3 | Wikipedia | HTTP/JSON | `parsers/wikipedia.py` | ✅ ~73 |
+| 4 | Госреестр Минэка | HTTP/JSON | `parsers/gosreestr.py` | ⏸ stub — endpoint не найден (домены NXDOMAIN после реформы 2022) |
+| 5 | **VK Groups** | HTTP/JSON | `parsers/vk_groups.py` | ✅ **~6245** — главный источник email! Нужен `VK_TOKEN` |
+| 6 | Я.Карты | Chromium | `parsers/yandex_maps.py` | ✅ ~1751 (имя+адрес+сайт; phone в headless не отдаётся) |
+| 7 | Поиск (Я/Mail/Rambler/Bing) | Chromium | `parsers/search_engine.py` | ✅ ~147 |
+| 8 | 2ГИС | Chromium | `parsers/twogis.py` | ⛔ блокирует Крым (403 → /museum) |
 | 9 | Авито | Chromium | `parsers/avito.py` | ⛔ HTTP 429 «IP в бане» с DC-IP |
-| 10 | Суточно.ру | Chromium | `parsers/sutochno.py` | селекторы устаревали, проверить |
-| 11 | Ostrovok | Chromium | `parsers/ostrovok.py` | селекторы устаревали, проверить |
-| 12 | Crawler | aiohttp | `parsers/crawler.py` | ✅ обходит website из CSV, sitemap + ссылки |
+| 10 | Суточно.ру | Chromium | `parsers/sutochno.py` | селекторы устаревали |
+| 11 | Ostrovok | Chromium | `parsers/ostrovok.py` | карточек 0 — не отдаёт |
+| 12 | Crawler | aiohttp | `parsers/crawler.py` | ✅ обход website из master + sitemap |
 
-После всех — `parsers/email_finder.py` обогащает контактами по website.
-Затем `utils/excel_export.py` строит XLSX со вкладками по городам.
-Затем `utils/telegram_notify.py` шлёт отчёт в группу.
+**Добор контактов:** `parsers/email_finder.py` — заходит на website (mailto/JSON-LD/контактные страницы/обфускация),
+`parsers/site_finder.py` (ищет сайт через DuckDuckGo для записей без сайта — работает),
+`parsers/vk_email.py` (email с публичной VK-страницы).
 
----
-
-## Telegram бот
-
-**Бот:** `@Hotel_Lead2_Bot` (токен в `.env` на сервере).
-**Группа:** «База_Отель_Сбор» (`-1003781591836`).
-**Админ:** `user_id=1264067528` — только он может `/run` `/stop` `/run_source`.
-
-### Команды
-
-| Команда | Кто может | Что делает |
-|---|---|---|
-| `/status` | все | этап + счётчик + время |
-| `/sources` | все | разбивка по источникам в текущем CSV |
-| `/db` | все | накопленная база (SQLite) |
-| `/last_report` | все | прислать свежий CSV |
-| `/tail [N]` | все | последние N строк parser.log |
-| `/help` | все | список команд |
-| `/run` | только админ | стартовать полный прогон |
-| `/stop` | только админ | остановить прогон |
-| `/run_source <key>` | только админ | точечный прогон (см. ключи ниже) |
-
-**Ключи `/run_source`:** `osm`, `wikidata`, `wikipedia`, `gosreestr`, `vk`,
-`yandex`, `search`, `2gis`, `avito`, `sutochno`, `ostrovok`, `crawler`.
+**Постобработка:** `utils/merger.py` собирает `output/master_all.csv` (все прогоны, дедуп) →
+`utils/excel_export.py` строит XLSX со вкладками по городам → `utils/gdrive.py` грузит в Google Drive.
 
 ---
 
-## Подключение к серверу
+## Боты Telegram
+
+Группа отчётов: «База_Отель_Сбор» (`-1003781591836`). Админ: `user_id=1264067528`.
+
+### Бот №1 — `@Hotel_Lead2_Bot` (`crimea_bot.service`, stdlib)
+Команды: `/status`, `/sources`, `/db`, `/last_report`, `/tail [N]`, `/help`, и для админа `/run`, `/stop`, `/run_source <key>`.
+Код: `_extracted/crimea_parser/bot/`. В `/run` уже стоит `--no-block` (корректно).
+
+### Бот №2 — «АдминБотHotels» (`parser_admin_bot.service`, aiogram)
+Команды: `/run`, `/run_emails`, `/run_source`, `/status`, `/tail`, `/stop`, `/schedule`, `/last_report`.
+Код: `/root/parser_admin_bot/` (в репо — `parser_admin_bot/`).
+
+> ⚠️ **БАГ (фикс в репо, деплой ожидается):** `/run`, `/run_emails`, `/run_source` вызывали
+> `systemctl start` oneshot-юнита, который блокируется на часы → обёртка ловила timeout 30с →
+> ложная ошибка `❌ systemctl start: rc=124`. Сервис при этом РЕАЛЬНО стартовал.
+> **Фикс:** `services/systemd.py` + `handlers/commands.py` — добавлен `--no-block`.
+> Закоммичен в репо, но **на сервер `/root/parser_admin_bot/` ещё не залит** — задеплоить:
+> `scp эти 2 файла → /root/parser_admin_bot/...; systemctl restart parser_admin_bot.service`.
+
+---
+
+## Сервер: подключение и команды
 
 ```bash
-ssh root@212.116.115.150
-# пароль: tRu741mAz
+ssh root@212.116.115.150   # пароль — приватно, хранится у владельца (НЕ в репозитории)
 ```
 
-### Где что лежит на сервере
-
-| Путь | Что |
+| systemd-юнит | Назначение |
 |---|---|
-| `/home/crimea_parser/` | основная директория парсера |
-| `/home/crimea_parser/venv/` | Python venv (3.12) |
-| `/home/crimea_parser/.env` | TG_BOT_TOKEN, TG_CHAT_ID, HEADLESS, AUTO_NOTIFY, VK_TOKEN |
-| `/home/crimea_parser/output/` | CSV/XLSX-отчёты, progress.json, dedup.db |
-| `/home/crimea_parser/parser.log` | stdout прогона |
-| `/home/crimea_parser/parser_error.log` | stderr Playwright/Chromium |
-| `/home/crimea_parser/bot.log` | лог Telegram-бота |
-| `/etc/systemd/system/crimea_parser.service` | основной юнит парсера |
-| `/etc/systemd/system/crimea_parser.timer` | вс 03:00 MSK |
-| `/etc/systemd/system/crimea_bot.service` | бот (Restart=always) |
-| `/etc/systemd/system/crimea_watchdog.timer` | каждые 10 мин |
-
-### Полезные команды
+| `crimea_parser.service` | полный прогон (12 источников), oneshot, `TimeoutStartSec=12h`, `MemoryMax=3G` |
+| `crimea_parser.timer` | автозапуск вс 03:00 MSK |
+| `crimea_email_finder.service` | добор по master_all (`run_email_finder.py`) |
+| `crimea_bot.service` | бот №1 (Restart=always) |
+| `parser_admin_bot.service` | бот №2 |
+| `crimea_watchdog.timer` | каждые 10 мин: алерт зависания/падения, heartbeat 30 мин |
+| `crimea_vk.service` | transient (через `systemd-run`) — VK-добор |
 
 ```bash
-# Статус всех юнитов
-systemctl status crimea_parser.service crimea_bot.service crimea_watchdog.timer
-
-# Прогресс
-tail -f /home/crimea_parser/parser.log
+# Запуск (всегда с --no-block для oneshot!)
+systemctl start --no-block crimea_parser.service
+# VK-добор отдельно (HTTP, можно параллельно):
+systemd-run --unit=crimea_vk --property=WorkingDirectory=/home/crimea_parser \
+  --setenv=PYTHONUNBUFFERED=1 /home/crimea_parser/venv/bin/python /home/crimea_parser/run_vk.py
+# Только добор контактов по всей базе:
+systemctl start --no-block crimea_email_finder.service
+# Прогресс / логи
 cat /home/crimea_parser/output/progress.json
-
-# Что в свежем CSV
-wc -l /home/crimea_parser/output/result_*.csv | tail -5
-
-# Перезапустить бот после изменения кода
-systemctl restart crimea_bot.service
-
-# Ручной запуск (быстрый smoke)
-cd /home/crimea_parser && ./venv/bin/python main.py
+tail -f /home/crimea_parser/parser.log
 ```
 
----
+`.env` ключи: `TG_BOT_TOKEN`, `TG_CHAT_ID`, `VK_TOKEN` (бессрочный, scope groups),
+`GDRIVE_FOLDER_ID`, `GDRIVE_CREDENTIALS`, `HEADLESS`, `AUTO_NOTIFY`, `ENRICH_LATEST`.
 
-## Деплой нового кода
-
-С локальной машины (Windows + Git Bash):
-
-```bash
-# 1. правки в _extracted/crimea_parser/...
-tar -czf crimea_parser.tar.gz -C _extracted crimea_parser
-python _deploy_helper.py upload
-python _deploy_helper.py exec "cd /root && rm -rf crimea_parser && tar -xzf crimea_parser.tar.gz && rsync -av --exclude=venv --exclude=output --exclude='*.log' /root/crimea_parser/ /home/crimea_parser/ | tail -8; find /home/crimea_parser -name __pycache__ -exec rm -rf {} + 2>/dev/null; systemctl restart crimea_bot.service"
-```
-
-Полный re-deploy с пересборкой venv/Chromium: `bash deploy.sh` на сервере.
-
-`_deploy_helper.py` — простой Python-helper на paramiko (логин/пароль захардкожены).
+Деплой кода: `python _deploy_helper.py upload` + распаковка, либо точечно через paramiko
+(см. историю). `_deploy_helper.py` — paramiko-helper (логин/пароль внутри).
 
 ---
 
-## Известные проблемы и узкие места
+## Известные проблемы
 
-### Критичные
-1. **2ГИС блокирует Крым** на уровне сервиса (geo-restriction). Web-парсинг невозможен.
-2. **Авито HTTP 429** с DC-IP sprinthost. Нужен residential proxy.
-3. **Я.Карты в headless не отдают телефон** из правой панели/org-страницы (WebGL-зависимая отрисовка). Адреса + сайты — есть.
-4. **Госреестр** — все известные домены `*.tourism.gov.ru` сейчас NXDOMAIN. Нужно найти живой endpoint после реформы 2022.
+| Проблема | Статус |
+|---|---|
+| 2ГИС блокирует крымский регион (403) | не решается без РФ-прокси из РФ-датацентра |
+| Авито 429 «проблема с IP» | нужен residential RU-прокси (~$5-15/мес) |
+| Я.Карты не отдают phone в headless | phone берём из email_finder по website |
+| Госреестр endpoint NXDOMAIN | искать живой адрес Нац.реестра средств размещения |
+| **VK-шум**: по «база отдыха/вилла/апартаменты» цепляет турфирмы, чаты, частников (напр. «ТЕНТ-МАСТЕР») | нужна фильтрация по типу/ключевым словам — НЕ сделано |
+| Город «Крым» (не уточнён) у ~2000 OSM-записей | bbox `geo_city.py` покрывает не все посёлки |
+| email_finder `pick_address` хватает мусор (меню/текст вместо адреса) | низкий приоритет |
 
-### Решённые (как сделано)
-- ✅ **OOM при ~5000 объектах** → `MemoryMax=3G` + `OOMPolicy=stop`
-- ✅ **Таймаут systemd 4h** → `TimeoutStartSec=12h`
-- ✅ **DNS-сбой ронял отчёт** → 5 ретраев с экспоненциальным backoff в `telegram_notify`
-- ✅ **CSV в Excel «в одну колонку»** → разделитель `;` + `QUOTE_ALL` + чистка `\n\r\t`
-- ✅ **66% записей с городом «Крым»** → bbox-таблица `utils/geo_city.py` по lat/lon
-- ✅ **Дубли между прогонами** → SQLite `output/dedup.db` с UNIQUE
-- ✅ **Парсер тихо зависал** → watchdog алертит, heartbeat каждые 30 мин
-- ✅ **Финальный отчёт терялся при падении** → чекпоинты в TG после каждого этапа
-
----
-
-## Что делать дальше
-
-### Если хотите больше данных
-1. **VK Groups** (~500-2000 объектов): создать app на dev.vk.com, взять
-   user `access_token`, добавить `VK_TOKEN=...` в `.env`, запустить
-   `/run_source vk`.
-2. **Госреестр** (~800-1500): найти живой endpoint Национального реестра
-   средств размещения (ФЗ-590/2022). Кандидаты для поиска через DevTools:
-   сайт Минэкономразвития туризма, ФНС-открытые данные, fsa.gov.ru.
-3. **Residential RU-proxy** (~$5-15/мес от Soax/Proxy6): разблокирует
-   Авито и потенциально 2ГИС через прокси-цепочку.
-4. **Wikidata расширенный**: текущий SPARQL даёт 10-15 объектов. Можно
-   расширить типы P31 и добавить запросы по бoundingbox координат.
-
-### Эксплуатация
-- Раз в неделю проверять `/last_report` в группе после воскресного прогона
-- Если приходит «❌ Парсер упал» — посмотреть `/tail 60` для диагностики
-- Раз в квартал проверять селекторы Я.Карт / Суточно / Ostrovok (они меняются)
-
-### Архитектурный долг
-- `parsers/twogis.py` и `parsers/avito.py` сейчас бессмысленны на этом
-  VPS — можно либо удалить из `RUNNERS`, либо оставить «на случай прокси»
-- `parser_admin_bot/` (отдельный старый проект aiogram) и
-  `_extracted/crimea_parser/bot/` (новый stdlib-бот) — два бота. Сейчас
-  работает только новый. Старый можно удалить когда убедимся что
-  весь функционал перенесён.
+### Решено
+OOM → MemoryMax=3G+OOMPolicy=stop · таймаут 4h→12h · DNS-сбой ронял отчёт → 5 ретраев в telegram_notify ·
+CSV в Excel «одной колонкой» → разделитель `;`+QUOTE_ALL · дубли между прогонами → SQLite `dedup.db` ·
+тихое зависание → watchdog+heartbeat · VK `_clean_site` `Invalid IPv6 URL` → try/except.
 
 ---
 
-## История фаз (git log)
+## Что делать дальше (приоритет)
 
-| Фаза | Коммит | Что добавлено |
-|---|---|---|
-| 1 | `066c5ad` | Базовый парсер из ТЗ заказчика |
-| 2-3 | `e18a002` | parser_admin_bot (aiogram) + XLSX-экспорт |
-| 4 | `1f03369` | Telegram control bot (stdlib) + crash-resistance |
-| 5 | `548e692` | Crawler + bbox-города + чекпоинты + heartbeat |
-| 6 | `b67a919` | Wikipedia + Госреестр stub + VK Groups (opt-in) |
+1. **Задеплоить фикс бота №2** (`--no-block`) — убрать ложную ошибку `rc=124`. Файлы готовы в репо.
+2. **Почистить VK-шум** — пометить нерелевантные VK-группы (нет отельных слов в названии/activity) как `needs_review`, не мешать чистым.
+3. **email_finder по новым VK-записям** — у многих VK-групп есть `site` без email в контактах → добор с сайта. Ещё +500-800 email. (`systemctl start --no-block crimea_email_finder.service`, RAM — только когда основной прогон не идёт.)
+4. **Прокси-слой** (task #5) — разблокировать Авито/2ГИС. Нужны креды прокси.
+5. **DaData по ИНН** (task #6) — нужен живой Госреестр + платный API.
 
 ---
+
+## История фаз (git)
+
+| Фаза | Что |
+|---|---|
+| 1 | Базовый парсер из ТЗ |
+| 2-3 | parser_admin_bot (aiogram) + XLSX |
+| 4 | Бот №1 (stdlib) + crash-resistance |
+| 5 | Crawler + bbox-города + чекпоинты + heartbeat |
+| 6 | Wikipedia + Госреестр stub + VK Groups (заготовка) |
+| 7 (29.05) | VK заработал (×2.8 email), фикс бота №2 (--no-block), синхронизация репо с сервером |
 
 ## Контакты
-
-- **Заказчик:** Alex (RitualB2B / ritualb2b.ru)
-- **Telegram-группа отчётов:** «База_Отель_Сбор» (id `-1003781591836`)
-- **Бот:** `@Hotel_Lead2_Bot`
-- **Сервер:** root@212.116.115.150 (sprinthost.ru)
+Заказчик: Alex (RitualB2B / ritualb2b.ru) · Группа: «База_Отель_Сбор» (`-1003781591836`) ·
+Боты: `@Hotel_Lead2_Bot`, «АдминБотHotels» · Сервер: root@212.116.115.150 (sprinthost).

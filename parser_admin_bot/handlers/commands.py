@@ -11,6 +11,7 @@ from aiogram.types import (CallbackQuery, FSInputFile,
                             InlineKeyboardButton, InlineKeyboardMarkup, Message)
 
 
+
 def esc(s: str) -> str:
     """HTML-escape для значений, идущих в parse_mode=HTML сообщения.
     systemctl/journalctl могут вернуть <,>,& — без эскейпа Telegram упадёт
@@ -44,7 +45,7 @@ async def cmd_help(m: Message) -> None:
         "<b>Запуск</b>\n"
         "/run — полный прогон\n"
         "/run_emails — только email_finder на последнем CSV\n"
-        "/run_source NAME — один источник "
+        "/run_source <name> — один источник "
         f"({', '.join(VALID_SOURCES)})\n"
         "/stop — остановить текущий прогон\n\n"
         "<b>Информация</b>\n"
@@ -75,8 +76,7 @@ async def cmd_run(m: Message) -> None:
         await m.answer(f"✅ {PARSER_UNIT} запущен (TimeoutStartSec=12h, fire-and-forget)\n"
                        f"Прогресс: /status. Финальный отчёт придёт автоматически.")
     else:
-        await m.answer(f"❌ systemctl start: rc={code}\n<pre>{esc(out)}</pre>",
-                       parse_mode="HTML")
+        await m.answer(f"❌ systemctl start: rc={code}\n<pre>{out}</pre>", parse_mode="HTML")
 
 
 @router.message(Command("run_emails"))
@@ -88,8 +88,7 @@ async def cmd_run_emails(m: Message) -> None:
     if code == 0:
         await m.answer(f"✅ {EMAILS_UNIT} запущен — обогащает последний CSV.")
     else:
-        await m.answer(f"❌ systemctl start: rc={code}\n<pre>{esc(out)}</pre>",
-                       parse_mode="HTML")
+        await m.answer(f"❌ systemctl start: rc={code}\n<pre>{out}</pre>", parse_mode="HTML")
 
 
 @router.message(Command("run_source"))
@@ -99,11 +98,11 @@ async def cmd_run_source(m: Message, command: CommandObject) -> None:
         await m.answer(f"Источник: {', '.join(VALID_SOURCES)}")
         return
     unit = f"crimea_parser_source@{name}.service"
-    code, out = await _run("sudo", "-n", "systemctl", "start", unit)
+    code, out = await _run("sudo", "-n", "systemctl", "start", "--no-block", unit)
     if code == 0:
         await m.answer(f"✅ {unit} запущен (ONLY_SOURCE={name}, без email_finder).")
     else:
-        await m.answer(f"❌ rc={code}\n<pre>{esc(out[:1000])}</pre>", parse_mode="HTML")
+        await m.answer(f"❌ rc={code}\n<pre>{out[:1000]}</pre>", parse_mode="HTML")
 
 
 @router.message(Command("stop"))
@@ -112,8 +111,7 @@ async def cmd_stop(m: Message) -> None:
     if code == 0:
         await m.answer(f"🛑 {PARSER_UNIT} остановлен.")
     else:
-        await m.answer(f"❌ systemctl stop: rc={code}\n<pre>{esc(out)}</pre>",
-                       parse_mode="HTML")
+        await m.answer(f"❌ systemctl stop: rc={code}\n<pre>{out}</pre>", parse_mode="HTML")
 
 
 _OUTPUT_DIR = "/home/crimea_parser/output"
@@ -198,10 +196,10 @@ async def cmd_status(m: Message) -> None:
         f"📊 <b>Статус</b>",
         f"{PARSER_UNIT}: {'🟢 active' if parser_active else '⚪ inactive'}",
         f"{EMAILS_UNIT}: {'🟢 active' if emails_active else '⚪ inactive'}",
-        f"Стадия: <b>{esc(stage)}</b>",
+        f"Стадия: <b>{stage}</b>",
         "",
         f"<b>Последний CSV</b>",
-        f"<pre>{esc(csv_info)}</pre>",
+        f"<pre>{csv_info}</pre>",
     ]
     await m.answer("\n".join(parts), parse_mode="HTML")
 
@@ -215,13 +213,13 @@ async def cmd_logs(m: Message, command: CommandObject) -> None:
     out = await journal_tail(PARSER_UNIT, n=n)
     if len(out) > 3500:
         out = out[-3500:]
-    await m.answer(f"<pre>{esc(out) or 'пусто'}</pre>", parse_mode="HTML")
+    await m.answer(f"<pre>{out or 'пусто'}</pre>", parse_mode="HTML")
 
 
 @router.message(Command("health"))
 async def cmd_health(m: Message) -> None:
     out = await health()
-    await m.answer(f"<pre>{esc(out)}</pre>", parse_mode="HTML")
+    await m.answer(f"<pre>{out}</pre>", parse_mode="HTML")
 
 
 async def _send_file(m: Message, path: str | None, label: str) -> None:
@@ -253,9 +251,8 @@ async def cmd_timer_on(m: Message) -> None:
     if code == 0 and code2 == 0:
         await m.answer(f"✅ {PARSER_TIMER}: enabled+started (вс 03:00)")
     else:
-        await m.answer(
-            f"<pre>enable: rc={code}\n{esc(out)}\nstart: rc={code2}\n{esc(out2)}</pre>",
-            parse_mode="HTML")
+        await m.answer(f"<pre>enable: rc={code}\n{out}\nstart: rc={code2}\n{out2}</pre>",
+                       parse_mode="HTML")
 
 
 @router.message(Command("timer_off"))
@@ -265,15 +262,14 @@ async def cmd_timer_off(m: Message) -> None:
     if code == 0 and code2 == 0:
         await m.answer(f"🛑 {PARSER_TIMER}: остановлен и отключён")
     else:
-        await m.answer(
-            f"<pre>stop: rc={code}\n{esc(out)}\ndisable: rc={code2}\n{esc(out2)}</pre>",
-            parse_mode="HTML")
+        await m.answer(f"<pre>stop: rc={code}\n{out}\ndisable: rc={code2}\n{out2}</pre>",
+                       parse_mode="HTML")
 
 
 @router.message(Command("schedule"))
 async def cmd_schedule(m: Message) -> None:
     code, out = await _run("systemctl", "list-timers", "--all", PARSER_TIMER)
     if code != 0:
-        await m.answer(f"<pre>rc={code}\n{esc(out)}</pre>", parse_mode="HTML")
+        await m.answer(f"<pre>rc={code}\n{out}</pre>", parse_mode="HTML")
         return
-    await m.answer(f"<pre>{esc(out)}</pre>", parse_mode="HTML")
+    await m.answer(f"<pre>{out}</pre>", parse_mode="HTML")
