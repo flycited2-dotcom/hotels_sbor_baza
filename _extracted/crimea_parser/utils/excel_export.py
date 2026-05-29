@@ -2,9 +2,13 @@
 
 Структура книги:
   «Сводка»       — статистика по источникам/городам/типам клиентов
-  «Все»          — полный список (фильтр + поиск)
-  <Город>        — отдельный лист на каждый город из CSV
+  «Крым»         — общий полный список всех записей (фильтр + поиск)
+  <Город>        — отдельный лист на каждый город с ≥5 записями
+  «Остальные»    — города с <5 записями, собраны вместе
   «Без контактов» — записи без phone и без email (для ручного добивания)
+
+Сортировка строк в каждом листе: сначала записи с email, затем с телефоном,
+внутри — по названию (А→Я).
 
 Форматирование:
   - заморожена шапка
@@ -100,8 +104,19 @@ def _safe_sheet_name(name: str) -> str:
     return out.strip()[:31] or "Лист"
 
 
+def _sort_rows(rows: list[dict]) -> list[dict]:
+    """email сверху, затем телефон, затем по названию (А→Я)."""
+    def key(r: dict):
+        has_email = 0 if (r.get("email") or "").strip() else 1
+        has_phone = 0 if (r.get("phone") or "").strip() else 1
+        name = (r.get("name") or "").strip().lower()
+        return (has_email, has_phone, name)
+    return sorted(rows, key=key)
+
+
 def _write_sheet(ws, rows: list[dict], with_filter: bool = True) -> None:
     """Запись данных в лист с форматированием."""
+    rows = _sort_rows(rows)
     # шапка
     for col_idx, header in enumerate(HEADERS, start=1):
         cell = ws.cell(row=1, column=col_idx, value=header)
@@ -239,11 +254,12 @@ def build_xlsx(csv_path: str, xlsx_path: str | None = None) -> str | None:
     ws_summary.title = "Сводка"
     _write_summary(ws_summary, rows, csv_path)
 
-    ws_all = wb.create_sheet("Все")
+    GENERAL_SHEET = "Крым"
+    ws_all = wb.create_sheet(GENERAL_SHEET)
     _write_sheet(ws_all, rows)
 
     # Группа по городам — отдельный лист на каждый; мелкие города → «Остальные»
-    MIN_CITY_ROWS = 10
+    MIN_CITY_ROWS = 5
 
     by_city: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
@@ -255,9 +271,13 @@ def build_xlsx(csv_path: str, xlsx_path: str | None = None) -> str | None:
         if len(by_city[city]) < MIN_CITY_ROWS:
             others.extend(by_city[city])
             continue
-        sheet_name = _safe_sheet_name(city)
+        label = city
+        # «Крым» как город = регион без уточнения — не путать с общим листом
+        if _safe_sheet_name(city) == GENERAL_SHEET:
+            label = f"{city} (не уточнён)"
+        sheet_name = _safe_sheet_name(label)
         if sheet_name in wb.sheetnames:
-            sheet_name = _safe_sheet_name(f"{city}_2")
+            sheet_name = _safe_sheet_name(f"{label}_2")
         ws = wb.create_sheet(sheet_name)
         _write_sheet(ws, by_city[city])
 

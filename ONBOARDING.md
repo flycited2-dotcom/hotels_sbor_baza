@@ -22,7 +22,7 @@
 | `_extracted/crimea_parser/run_vk.py` | Отдельный VK-добор (HTTP-only, без Chromium) |
 
 **Прод-сервер:** `root@212.116.115.150` (sprinthost, СПб, Ubuntu 24.04, **RAM 5.8 ГБ — мало!**).
-Файлы парсера: `/home/crimea_parser/`. Бот №2: `/root/parser_admin_bot/`. Секреты: `.env` (chmod 600).
+Файлы парсера: `/home/crimea_parser/`. Бот №2: `/opt/parser_admin_bot/` (ExecStart указывает сюда; `/root/parser_admin_bot/` — устаревшая копия, не используется). Секреты: `.env` (chmod 600).
 
 > ⚠️ **RAM 5.8 ГБ** — нельзя запускать два Chromium одновременно (основной прогон + email_finder = OOM). VK-добор (HTTP) можно параллельно.
 
@@ -66,14 +66,13 @@
 
 ### Бот №2 — «АдминБотHotels» (`parser_admin_bot.service`, aiogram)
 Команды: `/run`, `/run_emails`, `/run_source`, `/status`, `/tail`, `/stop`, `/schedule`, `/last_report`.
-Код: `/root/parser_admin_bot/` (в репо — `parser_admin_bot/`).
+Код: `/opt/parser_admin_bot/` (в репо — `parser_admin_bot/`).
 
 > ⚠️ **БАГ (фикс в репо, деплой ожидается):** `/run`, `/run_emails`, `/run_source` вызывали
 > `systemctl start` oneshot-юнита, который блокируется на часы → обёртка ловила timeout 30с →
 > ложная ошибка `❌ systemctl start: rc=124`. Сервис при этом РЕАЛЬНО стартовал.
 > **Фикс:** `services/systemd.py` + `handlers/commands.py` — добавлен `--no-block`.
-> Закоммичен в репо, но **на сервер `/root/parser_admin_bot/` ещё не залит** — задеплоить:
-> `scp эти 2 файла → /root/parser_admin_bot/...; systemctl restart parser_admin_bot.service`.
+> **Задеплоено 2026-05-29** в `/opt/parser_admin_bot/` (services/systemd.py + handlers/commands.py), бот перезапущен. Ложная ошибка `rc=124` устранена.
 
 ---
 
