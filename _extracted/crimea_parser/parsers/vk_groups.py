@@ -18,6 +18,7 @@ import urllib.request
 from datetime import datetime
 from urllib.parse import urlparse
 
+from parsers.vk_filter import classify as vk_classify
 from utils.storage import save_item, normalize_phone
 
 API = "https://api.vk.com/method"
@@ -161,6 +162,8 @@ async def run(context):
 
     # 2. Детали пачками по 500
     added = 0
+    skipped_noise = 0
+    flagged_ambiguous = 0
     gids = list(found.keys())
     for start in range(0, len(gids), 500):
         chunk = gids[start:start + 500]
@@ -192,6 +195,14 @@ async def run(context):
             social = f"https://vk.com/{screen}"
             activity = g.get("activity") or "размещение"
 
+            verdict = vk_classify(name, activity)
+            if verdict == "noise":
+                skipped_noise += 1
+                continue
+            comment = "vk_review" if verdict == "ambiguous" else ""
+            if verdict == "ambiguous":
+                flagged_ambiguous += 1
+
             if save_item({
                 "city": city,
                 "name": name,
@@ -201,9 +212,11 @@ async def run(context):
                 "website": site,
                 "social": social,
                 "category": activity,
+                "comment": comment,
                 "source": "VK",
                 "parsed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }):
                 added += 1
 
-    print(f"\n[VK] добавлено: {added}")
+    print(f"\n[VK] добавлено: {added} | пропущено шума: {skipped_noise} "
+          f"| помечено ambiguous: {flagged_ambiguous}")
