@@ -28,8 +28,8 @@ from services.systemd import (EMAILS_UNIT, PARSER_TIMER, PARSER_UNIT, _run,
 log = logging.getLogger(__name__)
 router = Router()
 
-VALID_SOURCES = ("osm", "wikidata", "yandex", "search", "2gis", "avito",
-                 "sutochno", "ostrovok")
+VALID_SOURCES = ("osm", "wikidata", "wikipedia", "vk", "yandex", "search",
+                 "2gis", "avito", "sutochno", "ostrovok", "crawler")
 
 
 @router.message(F.func(lambda m: not is_admin(m.chat.id)))
@@ -42,14 +42,17 @@ async def _block_strangers(message: Message) -> None:
 async def cmd_help(m: Message) -> None:
     text = (
         "<b>Управление парсером Crimea Hotels</b>\n\n"
+        "/menu — пульт на кнопках\n\n"
         "<b>Запуск</b>\n"
         "/run — полный прогон\n"
-        "/run_emails — только email_finder на последнем CSV\n"
+        "/run_emails — email_finder по master_all (вся база)\n"
         "/run_source <name> — один источник "
         f"({', '.join(VALID_SOURCES)})\n"
         "/stop — остановить текущий прогон\n\n"
         "<b>Информация</b>\n"
         "/status — стадия + последний CSV\n"
+        "/stats — аналитика базы + дельта\n"
+        "/progress — живой прогресс прогона\n"
         "/logs [N] — N последних строк journalctl (по умолчанию 50)\n"
         "/health — uptime, диск, память\n\n"
         "<b>Файлы</b>\n"
@@ -57,7 +60,8 @@ async def cmd_help(m: Message) -> None:
         "/csv_enriched — последний result_enriched_*.csv\n"
         "/xlsx — последний result_*.xlsx\n"
         "/reports — список последних файлов output/ для скачивания\n"
-        "/master — мастер-файл из всех прогонов\n\n"
+        "/master — мастер-файл из всех прогонов\n"
+        "/drive — папка Google Drive + перезалив\n\n"
         "<b>Расписание</b>\n"
         "/timer_on — включить еженедельный запуск\n"
         "/timer_off — отключить\n"
@@ -168,40 +172,10 @@ async def cmd_master(m: Message) -> None:
         await m.answer(f"❌ Ошибка: {esc(str(e))}")
 
 
-_STAGE_RE = re.compile(r"===\s*([^=]+?)\s*===")
-
-
 @router.message(Command("status"))
 async def cmd_status(m: Message) -> None:
-    parser_active = await is_active(PARSER_UNIT)
-    emails_active = await is_active(EMAILS_UNIT)
-
-    stage = "—"
-    log_path = os.path.join(os.getenv("PARSER_DIR", "/home/crimea_parser"),
-                             "parser.log")
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, encoding="utf-8", errors="replace") as f:
-                tail = f.readlines()[-200:]
-            for line in reversed(tail):
-                m_ = _STAGE_RE.search(line)
-                if m_:
-                    stage = m_.group(1).strip()
-                    break
-        except Exception:
-            pass
-
-    csv_info = csv_summary(latest_csv() or "")
-    parts = [
-        f"📊 <b>Статус</b>",
-        f"{PARSER_UNIT}: {'🟢 active' if parser_active else '⚪ inactive'}",
-        f"{EMAILS_UNIT}: {'🟢 active' if emails_active else '⚪ inactive'}",
-        f"Стадия: <b>{stage}</b>",
-        "",
-        f"<b>Последний CSV</b>",
-        f"<pre>{csv_info}</pre>",
-    ]
-    await m.answer("\n".join(parts), parse_mode="HTML")
+    from services.panel import status_text
+    await m.answer(await status_text(), parse_mode="HTML")
 
 
 @router.message(Command("logs"))

@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from handlers.commands import router  # noqa: E402
+from handlers.menu import menu_router  # noqa: E402
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -35,6 +36,7 @@ async def main() -> None:
     bot = Bot(token=token, default=DefaultBotProperties(parse_mode=None))
     dp = Dispatcher()
     dp.include_router(router)
+    dp.include_router(menu_router)
 
     me = await bot.get_me()
     log.info("Стартуем %s (id=%s)", me.username, me.id)
