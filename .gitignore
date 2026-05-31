@@ -66,3 +66,7 @@ reports/
 .agents/
 .claude/
 skills-lock.json
+
+# Локальные снапшоты сервера и рабочие черновики — не коммитим
+_server_current/
+_tmp_admin/

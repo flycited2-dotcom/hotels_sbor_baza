@@ -105,7 +105,16 @@ def _load_seeds_from_csv(path: str) -> list[str]:
 
 
 def _latest_csv() -> str:
+    """Возвращает источник seed-доменов для Crawler.
+
+    Приоритет master_all.csv: внутри одного прогона result_*.csv в начале
+    ещё пустой (Crawler работает не последним), а master_all накопил тысячи
+    доменов за все прошлые прогоны — это и есть лучший seed.
+    """
     import glob
+    master = "output/master_all.csv"
+    if os.path.exists(master) and os.path.getsize(master) > 1024:
+        return master
     files = sorted(glob.glob("output/result_2*.csv"), key=os.path.getmtime)
     return files[-1] if files else ""
 

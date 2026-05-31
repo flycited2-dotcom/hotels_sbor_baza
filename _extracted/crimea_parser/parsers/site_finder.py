@@ -10,6 +10,9 @@ _BLACKLIST = {
     "yandex.ru", "google.com", "2gis.ru", "avito.ru", "vk.com",
     "instagram.com", "ok.ru", "otzovik.com", "zoon.ru", "hotels.com",
     "airbnb.com", "wikipedia.org",
+    # сам DDG — если попали на anomaly-modal, первая ссылка ведёт на duckduckgo.com.
+    # без этого фильтра email_finder уходит туда и записывает error+...@duckduckgo.com.
+    "duckduckgo.com", "duckduckgo.org", "html.duckduckgo.com",
 }
 
 _RESULT_URL_RE = re.compile(r'<a[^>]+class="[^"]*result__url[^"]*"[^>]*>([^<]+)</a>', re.I)

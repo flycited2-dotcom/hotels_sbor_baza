@@ -1,4 +1,5 @@
 import csv
+import html
 import os
 import re
 from datetime import datetime
@@ -35,11 +36,22 @@ def normalize_phone(raw: str) -> str:
     return f"+7 ({digits[1:4]}) {digits[4:7]}-{digits[7:9]}-{digits[9:11]}"
 
 
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
 def _clean(value: str) -> str:
-    """Убираем переносы и табуляции — иначе Excel ломает строку."""
+    """Готовим значение к записи в CSV.
+
+    - убираем HTML-теги (VK иногда отдаёт name с <a>/<br>; ломали TG parse_mode=HTML)
+    - декодируем HTML entities (&amp; → &, &nbsp; → пробел)
+    - схлопываем whitespace и переносы — иначе Excel ломает строку
+    """
     if not value:
         return ""
-    s = str(value).replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    s = str(value)
+    s = _HTML_TAG_RE.sub(" ", s)
+    s = html.unescape(s)
+    s = s.replace("\r", " ").replace("\n", " ").replace("\t", " ").replace(" ", " ")
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
 
