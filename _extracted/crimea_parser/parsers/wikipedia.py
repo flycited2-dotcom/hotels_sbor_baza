@@ -11,7 +11,9 @@ import json
 import re
 from datetime import datetime
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from utils.http_retry import http_request
 from urllib.error import URLError, HTTPError
 
 from utils.storage import save_item
@@ -42,8 +44,8 @@ CITY_HINTS = (
 def _http_json(url: str) -> dict:
     try:
         req = Request(url, headers={"User-Agent": UA})
-        with urlopen(req, timeout=30) as r:
-            return json.loads(r.read().decode("utf-8"))
+        body = http_request(req, timeout=30)
+        return json.loads(body.decode("utf-8"))
     except (URLError, HTTPError, json.JSONDecodeError) as e:
         print(f"  [Wiki] err: {e}")
         return {}

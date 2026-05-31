@@ -14,9 +14,10 @@ import os
 import re
 import time
 import urllib.parse
-import urllib.request
 from datetime import datetime
 from urllib.parse import urlparse
+
+from utils.http_retry import http_request
 
 from parsers.vk_filter import classify as vk_classify
 from utils.storage import save_item, normalize_phone
@@ -62,8 +63,8 @@ def _call(method: str, token: str, **params) -> dict:
     params["v"] = V
     url = f"{API}/{method}?{urllib.parse.urlencode(params)}"
     try:
-        with urllib.request.urlopen(url, timeout=25) as r:
-            return json.loads(r.read().decode("utf-8", errors="replace"))
+        body = http_request(url, timeout=25)
+        return json.loads(body.decode("utf-8", errors="replace"))
     except Exception as e:
         return {"error": {"error_msg": str(e)}}
 

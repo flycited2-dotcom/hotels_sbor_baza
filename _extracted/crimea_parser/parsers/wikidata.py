@@ -4,14 +4,20 @@
 Возвращает: имя (ru), сайт, координаты, описание.
 """
 import json
+import os
+import time
 from datetime import datetime
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
 from urllib.error import URLError, HTTPError
 
 from utils.storage import save_item
+from utils.http_retry import http_request
 
 ENDPOINT = "https://query.wikidata.org/sparql"
+
+CACHE_DIR = os.path.join("output", "cache")
+CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 дней
 
 # P31 = instance of, P279 = subclass of, P17 = country, P131 = located in admin
 # Q15966495 = Crimea (subject of dispute), Q42959 = Sevastopol
@@ -32,7 +38,43 @@ LIMIT 400
 REGIONS = ["Q15966495", "Q42959"]  # Республика Крым, Севастополь
 
 
+def _cache_path(region: str) -> str:
+    return os.path.join(CACHE_DIR, f"wikidata_{region}.json")
+
+
+def _load_cache(region: str) -> list | None:
+    path = _cache_path(region)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            payload = json.load(f)
+        age = time.time() - float(payload.get("fetched_at", 0))
+        if age > CACHE_TTL_SECONDS:
+            return None
+        print(f"  [Wikidata] {region}: кэш age={int(age/3600)}ч < 7д, использую")
+        return payload.get("data") or []
+    except Exception as e:
+        print(f"  [Wikidata] {region}: кэш повреждён ({e}), refetch")
+        return None
+
+
+def _save_cache(region: str, data: list) -> None:
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        payload = {"fetched_at": time.time(), "data": data}
+        tmp = _cache_path(region) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, _cache_path(region))
+    except Exception as e:
+        print(f"  [Wikidata] {region}: не сохранить кэш: {e}")
+
+
 def _fetch_one(region: str) -> list:
+    cached = _load_cache(region)
+    if cached is not None:
+        return cached
     sparql = SPARQL_TEMPLATE.format(region=region)
     qs = urlencode({"query": sparql, "format": "json"})
     url = f"{ENDPOINT}?{qs}"
@@ -41,9 +83,11 @@ def _fetch_one(region: str) -> list:
             "User-Agent": "crimea_parser/1.0",
             "Accept": "application/sparql-results+json",
         })
-        with urlopen(req, timeout=90) as r:
-            data = json.loads(r.read().decode("utf-8"))
-        return data.get("results", {}).get("bindings", [])
+        body = http_request(req, timeout=90)
+        data = json.loads(body.decode("utf-8"))
+        rows = data.get("results", {}).get("bindings", [])
+        _save_cache(region, rows)
+        return rows
     except (URLError, HTTPError, json.JSONDecodeError) as e:
         print(f"  [Wikidata] {region} error: {e}")
         return []

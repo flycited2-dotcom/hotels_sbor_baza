@@ -7,7 +7,9 @@ import json
 import re
 from datetime import datetime
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from utils.http_retry import http_request
 from urllib.error import URLError, HTTPError
 
 from utils.storage import save_item
@@ -159,8 +161,8 @@ def _fetch_overpass() -> list:
                 headers={"User-Agent": "crimea_parser/1.0", "Content-Type": "application/x-www-form-urlencoded"},
                 method="POST",
             )
-            with urlopen(req, timeout=120) as r:
-                data = json.loads(r.read().decode("utf-8"))
+            raw = http_request(req, timeout=120)
+            data = json.loads(raw.decode("utf-8"))
             return data.get("elements", [])
         except (URLError, HTTPError, json.JSONDecodeError) as e:
             print(f"  [OSM] {url} fail: {e}")

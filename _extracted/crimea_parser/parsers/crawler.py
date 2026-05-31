@@ -28,7 +28,7 @@ import aiohttp
 
 from utils.storage import save_item
 from parsers.search_engine import AGGREGATOR_DOMAINS, is_aggregator
-from parsers.email_finder import pick_email, pick_phone, pick_address
+from parsers.email_finder import pick_email, pick_phone, pick_address, pick_address_from_html
 
 
 MAX_PAGES_PER_DOMAIN = 15
@@ -240,7 +240,7 @@ async def _crawl_domain(session: aiohttp.ClientSession, origin: str,
         if not best_phone:
             best_phone = pick_phone(html)
         if not best_address:
-            best_address = pick_address(_strip(html))
+            best_address = pick_address_from_html(html) or pick_address(_strip(html))
 
         if pages_in_domain < MAX_PAGES_PER_DOMAIN:
             for link in _extract_links(html, origin):

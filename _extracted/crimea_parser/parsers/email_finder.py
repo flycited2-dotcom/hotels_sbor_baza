@@ -31,11 +31,24 @@ OUTPUT_FILE = f"output/result_enriched_{datetime.now().strftime('%Y%m%d_%H%M')}.
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 PHONE_RE = re.compile(r"(?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}")
 
+# Адрес: префикс города (`г.`/`город` etc) + ИМЯ_СОБСТВЕННОЕ (заглавная) +
+# тип улицы + название, всё в одной строке. Точки обязательны для сокращений,
+# чтобы `с` (в «расположены») не съедало правило. Заглавная буква имени — без
+# IGNORECASE, иначе false positive типа «расположены на улице».
 ADDRESS_RE = re.compile(
-    r"(?:(?:г\.?|город)\s*[А-Яа-яЁё\-]+[,.\s]+)?"
-    r"(?:(?:ул\.?|улица|пр-т|проспект|пер\.?|переулок|ш\.?|шоссе|пл\.?|площадь|наб\.?|набережная|пгт\.?|посёлок|поселок)\s*"
-    r"[А-Яа-яЁё0-9\s\-\.,]{3,80})",
-    re.IGNORECASE,
+    r"\b"
+    r"(?i:(?:г\.|город|пгт\.|посёлок|поселок|с\.|село|д\.|деревня))"
+    r"\s+"
+    r"[А-ЯЁ][А-Яа-яЁё\-]{2,}"
+    r"[^\n\r]{0,40}?"
+    r"(?i:(?:ул\.|улица|пр-т|проспект|пр\.|пер\.|переулок|ш\.|шоссе|пл\.|площадь|наб\.|набережная|просп\.|бульвар|б-р))"
+    r"[^\n\r]{3,100}"
+)
+
+# JSON-LD: schema.org PostalAddress. Захватываем весь массив с парами.
+JSON_LD_RE = re.compile(
+    r"<script[^>]+type=[\"']application/ld\+json[\"'][^>]*>(.*?)</script>",
+    re.IGNORECASE | re.DOTALL,
 )
 
 EMAIL_BLOCKLIST = (
@@ -174,6 +187,49 @@ def pick_phone(text: str) -> str:
         return ""
     matches = PHONE_RE.findall(text)
     return normalize_phone(matches[0]) if matches else ""
+
+
+def _walk_json_for_address(obj) -> str:
+    """Рекурсивный обход JSON-LD: ищет PostalAddress, возвращает 'street, locality'."""
+    if isinstance(obj, dict):
+        t = obj.get("@type") or obj.get("type")
+        types = [t] if isinstance(t, str) else (t if isinstance(t, list) else [])
+        if any((isinstance(x, str) and "PostalAddress" in x) for x in types):
+            street = (obj.get("streetAddress") or "").strip()
+            locality = (obj.get("addressLocality") or obj.get("addressRegion") or "").strip()
+            parts = [p for p in (locality, street) if p]
+            if parts:
+                return ", ".join(parts)
+        # address может быть строкой или вложенным PostalAddress
+        addr = obj.get("address")
+        if isinstance(addr, str) and len(addr) > 8:
+            return addr.strip()
+        for v in obj.values():
+            found = _walk_json_for_address(v)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _walk_json_for_address(item)
+            if found:
+                return found
+    return ""
+
+
+def pick_address_from_html(html: str) -> str:
+    """Адрес из JSON-LD schema.org/PostalAddress (приоритет надёжности)."""
+    if not html:
+        return ""
+    for m in JSON_LD_RE.finditer(html):
+        raw = m.group(1).strip()
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        found = _walk_json_for_address(data)
+        if found:
+            return re.sub(r"\s{2,}", " ", found).strip(" ,.;")[:200]
+    return ""
 
 
 def pick_address(text: str) -> str:
@@ -316,6 +372,12 @@ async def _harvest_page(page, site_domain: str = "") -> tuple[str, str, str, str
     # 4) Visible text — для address и обфусцированных email
     try:
         visible = await page.evaluate("document.body && document.body.innerText || ''")
+        if not address:
+            try:
+                page_html = await page.content()
+                address = pick_address_from_html(page_html)
+            except Exception:
+                pass
         if not address:
             address = pick_address(visible)
         if not email:
