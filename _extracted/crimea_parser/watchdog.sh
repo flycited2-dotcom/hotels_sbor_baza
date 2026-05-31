@@ -15,7 +15,8 @@ STATE_FILE=/tmp/crimea_watchdog_state
 mkdir -p $(dirname $STATE_FILE)
 
 NOW=$(date +%s)
-STATE=$(systemctl is-active crimea_parser.service 2>/dev/null || echo unknown)
+STATE=$(systemctl is-active crimea_parser.service 2>/dev/null || true)
+[ -z "$STATE" ] && STATE=unknown
 
 send_tg() {
     local msg="$1"
@@ -25,24 +26,31 @@ send_tg() {
         --data-urlencode "parse_mode=HTML" >/dev/null 2>&1 || true
 }
 
-# 1. Если парсер не активен — снимаем флаг alert_sent и выходим
+# 1. Парсер не активен — снимаем флаги, при failed уведомляем один раз.
+# Не выходим: блоки 4-6 ниже не зависят от состояния парсера.
 if [ "$STATE" != "active" ] && [ "$STATE" != "activating" ]; then
-    # один раз сообщим если парсер недавно был активен и теперь failed
     if [ "$STATE" = "failed" ] && [ ! -f "$STATE_FILE.fail_sent" ]; then
         send_tg "❌ <b>Парсер упал</b> (systemctl: failed). /status для деталей."
         touch "$STATE_FILE.fail_sent"
     fi
     rm -f "$STATE_FILE.hang_sent" "$STATE_FILE.last_heartbeat"
-    exit 0
 fi
 
 # Парсер живой → сбрасываем флаг fail_sent
-rm -f "$STATE_FILE.fail_sent"
+if [ "$STATE" = "active" ] || [ "$STATE" = "activating" ]; then
+    rm -f "$STATE_FILE.fail_sent"
+fi
+
+# Блоки 2-3 имеют смысл только при работающем парсере.
+PARSER_ACTIVE=0
+if [ "$STATE" = "active" ] || [ "$STATE" = "activating" ]; then
+    PARSER_ACTIVE=1
+fi
 
 LATEST=$(ls -t /home/crimea_parser/output/result_2*.csv 2>/dev/null | grep -v enriched | head -1)
 
 # 2. Зависание: CSV не растёт > 30 мин
-if [ -n "$LATEST" ]; then
+if [ $PARSER_ACTIVE -eq 1 ] && [ -n "$LATEST" ]; then
     MTIME=$(stat -c %Y "$LATEST")
     AGE=$(( NOW - MTIME ))
     if [ $AGE -gt 1800 ] && [ ! -f "$STATE_FILE.hang_sent" ]; then
@@ -63,7 +71,7 @@ fi
 # 3. Heartbeat каждые 30 минут пока парсер активен
 LAST_HB=$(cat "$STATE_FILE.last_heartbeat" 2>/dev/null || echo 0)
 SINCE_HB=$(( NOW - LAST_HB ))
-if [ $SINCE_HB -ge 1800 ]; then
+if [ $PARSER_ACTIVE -eq 1 ] && [ $SINCE_HB -ge 1800 ]; then
     STAGE="?"
     COUNT="?"
     QUERY=""

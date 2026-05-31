@@ -35,9 +35,12 @@ def build_master(output_dir: str = OUTPUT_DIR) -> str:
         key=os.path.getmtime,
     )
 
+    # `*enriched*.csv` ловит обе схемы именования:
+    # старая — foo_enriched.csv, новая — result_enriched_TS.csv.
+    enriched_glob = os.path.join(output_dir, "*enriched*.csv")
     enriched_bases = {
         os.path.basename(f).replace("_enriched", "")
-        for f in glob.glob(os.path.join(output_dir, "*_enriched.csv"))
+        for f in glob.glob(enriched_glob)
     }
 
     seen: OrderedDict[str, dict] = OrderedDict()
@@ -51,7 +54,7 @@ def build_master(output_dir: str = OUTPUT_DIR) -> str:
 
     # Load enriched files on top (they win on conflicts, fill in missing fields)
     for filepath in sorted(
-        glob.glob(os.path.join(output_dir, "*_enriched.csv")),
+        glob.glob(enriched_glob),
         key=os.path.getmtime,
     ):
         _load_csv_into(filepath, seen)
