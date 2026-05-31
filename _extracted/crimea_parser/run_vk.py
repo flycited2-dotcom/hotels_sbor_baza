@@ -6,10 +6,11 @@ import asyncio
 import os
 import sys
 
-from dotenv import load_dotenv
-
-load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from utils.env_loader import load_all_env  # noqa: E402
+
+load_all_env()
 
 from parsers import vk_groups  # noqa: E402
 from utils.storage import total  # noqa: E402

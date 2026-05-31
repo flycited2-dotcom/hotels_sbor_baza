@@ -52,6 +52,8 @@ async def cmd_help(m: Message) -> None:
         "<b>Информация</b>\n"
         "/status — стадия + последний CSV\n"
         "/stats — аналитика базы + дельта\n"
+        "/sources — записи по источникам в свежем CSV\n"
+        "/db — статистика SQLite dedup.db (всё время)\n"
         "/progress — живой прогресс прогона\n"
         "/logs [N] — N последних строк journalctl (по умолчанию 50)\n"
         "/health — uptime, диск, память\n\n"
@@ -194,6 +196,55 @@ async def cmd_logs(m: Message, command: CommandObject) -> None:
 async def cmd_health(m: Message) -> None:
     out = await health()
     await m.answer(f"<pre>{out}</pre>", parse_mode="HTML")
+
+
+@router.message(Command("sources"))
+async def cmd_sources(m: Message) -> None:
+    """Записи по источникам в свежем CSV (перенесено из crimea_bot)."""
+    import csv as csv_mod
+    path = latest_csv()
+    if not path:
+        await m.answer("⚠ Нет CSV в output/")
+        return
+    sources: dict[str, int] = {}
+    total = 0
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            for row in csv_mod.DictReader(f, delimiter=";"):
+                total += 1
+                src = (row.get("source") or "").strip() or "—"
+                sources[src] = sources.get(src, 0) + 1
+    except Exception as e:
+        await m.answer(f"❌ Ошибка чтения CSV: {esc(str(e))}")
+        return
+    lines = [f"<b>По источникам</b> в <code>{esc(os.path.basename(path))}</code>:"]
+    for src, n in sorted(sources.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {esc(src)}: <b>{n}</b>")
+    lines.append(f"\nИтого: <b>{total}</b>")
+    await m.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("db"))
+async def cmd_db(m: Message) -> None:
+    """Статистика SQLite dedup.db за все прогоны (перенесено из crimea_bot)."""
+    try:
+        import sys
+        sys.path.insert(0, "/home/crimea_parser")
+        from utils import dedup  # type: ignore[import]
+        total = dedup.total()
+        by_src = dedup.stats_by_source()
+    except Exception as e:
+        await m.answer(f"❌ Ошибка чтения dedup.db: {esc(str(e))}")
+        return
+    lines = [
+        "<b>База за все прогоны (dedup.db)</b>",
+        f"Уникальных записей: <b>{total}</b>",
+        "",
+        "<b>По источникам</b>:",
+    ]
+    for s, n in sorted(by_src.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {esc(s)}: <b>{n}</b>")
+    await m.answer("\n".join(lines), parse_mode="HTML")
 
 
 async def _send_file(m: Message, path: str | None, label: str) -> None:

@@ -57,6 +57,35 @@ EMAIL_BLOCKLIST = ("noreply", "no-reply", "example.", "@vk.com", "@vkontakte")
 PREFERRED_PREFIXES = ("reservation", "reservations", "booking", "reserve", "book",
                       "reception", "info", "sales", "office", "hotel", "manager")
 
+# VK API error codes, означающие что VK_TOKEN недействителен.
+_TOKEN_DEAD_CODES = (5, 15, 27, 28)
+_token_alert_sent = False  # один алерт за прогон
+
+
+def _maybe_alert_token_dead(error: dict) -> None:
+    """Шлёт TG-алерт один раз за прогон, если ошибка VK означает invalid token."""
+    global _token_alert_sent
+    if _token_alert_sent:
+        return
+    code = error.get("error_code")
+    if code not in _TOKEN_DEAD_CODES:
+        return
+    _token_alert_sent = True
+    msg = error.get("error_msg", "?")
+    try:
+        from utils.telegram_notify import send_message
+        tok = os.environ.get("TG_BOT_TOKEN", "")
+        chat = os.environ.get("TG_CHAT_ID", "")
+        if tok and chat:
+            send_message(tok, chat, (
+                f"❌ <b>VK_TOKEN протух</b> (code={code}): <code>{msg[:120]}</code>\n"
+                "Получи новый по инструкции из docs/HANDOFF: "
+                "oauth.vk.com/authorize?client_id=2685278&scope=groups,offline&...\n"
+                "Затем обнови VK_TOKEN в /home/crimea_parser/.env"
+            ))
+    except Exception as e:
+        print(f"  [VK] не смог отправить алерт о токене: {e}")
+
 
 def _call(method: str, token: str, **params) -> dict:
     params["access_token"] = token
@@ -64,9 +93,12 @@ def _call(method: str, token: str, **params) -> dict:
     url = f"{API}/{method}?{urllib.parse.urlencode(params)}"
     try:
         body = http_request(url, timeout=25)
-        return json.loads(body.decode("utf-8", errors="replace"))
+        resp = json.loads(body.decode("utf-8", errors="replace"))
     except Exception as e:
         return {"error": {"error_msg": str(e)}}
+    if isinstance(resp, dict) and "error" in resp:
+        _maybe_alert_token_dead(resp["error"])
+    return resp
 
 
 def _site_domain(site: str) -> str:

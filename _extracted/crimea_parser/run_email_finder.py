@@ -8,12 +8,12 @@ import glob
 import os
 import sys
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 # гарантируем, что `utils.*` и `parsers.*` импортируются от корня скрипта
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from utils.env_loader import load_all_env  # noqa: E402
+
+load_all_env()
 
 from parsers.email_finder import run_enrichment  # noqa: E402
 from utils.telegram_notify import notify as tg_notify  # noqa: E402

@@ -21,6 +21,8 @@ CSV_DELIMITER = ";"
 
 _seen = set()
 _rows = []
+# Header пишем один раз при первом append. Сбрасывается на _rewrite_all.
+_header_written = False
 
 
 def normalize_phone(raw: str) -> str:
@@ -82,7 +84,7 @@ def save_item(item):
         cleaned["client_type"] = normalize_category(cleaned.get("category", ""))
 
     _rows.append(cleaned)
-    _flush()
+    _append_last()
     # обновляем счётчик в progress.json раз в 10 записей (чтобы не перегружать диск)
     if len(_rows) % 10 == 0:
         try:
@@ -94,7 +96,33 @@ def save_item(item):
     return True
 
 
-def _flush():
+def _append_last():
+    """Дописать последнюю строку _rows в CSV (без rewrite всего файла).
+
+    Header пишется один раз при первом вызове. Для больших прогонов это
+    линейная сложность, в отличие от O(N²) полного rewrite на каждый save.
+    """
+    global _header_written
+    if not _rows:
+        return
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    mode = "a" if _header_written else "w"
+    with open(OUTPUT_FILE, mode, newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=FIELDS,
+            delimiter=CSV_DELIMITER, quoting=csv.QUOTE_ALL,
+            extrasaction="ignore", restval="",
+        )
+        if not _header_written:
+            writer.writeheader()
+            _header_written = True
+        writer.writerow(_rows[-1])
+
+
+def _rewrite_all():
+    """Полный rewrite файла из _rows. Используется после cross_source_merge,
+    которая мутирует существующие строки in-place."""
+    global _header_written
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(
@@ -104,6 +132,12 @@ def _flush():
         )
         writer.writeheader()
         writer.writerows(_rows)
+    _header_written = True
+
+
+# Сохраняем _flush() как алиас на rewrite — для обратной совместимости
+# с внешним кодом, который мог вызывать utils.storage._flush() напрямую.
+_flush = _rewrite_all
 
 
 def total():
@@ -179,5 +213,5 @@ def cross_source_merge() -> int:
                         enriched += 1
                         break
     if enriched:
-        _flush()
+        _rewrite_all()
     return enriched

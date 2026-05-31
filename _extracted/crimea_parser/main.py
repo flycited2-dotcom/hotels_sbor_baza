@@ -2,10 +2,11 @@ import asyncio
 import glob
 import os
 import sys
-from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 
-load_dotenv()
+from utils.env_loader import load_all_env
+
+load_all_env()
 from utils.browser import create_browser_context
 from utils.storage import total, get_output_file, cross_source_merge
 from utils.telegram_notify import notify as tg_notify, checkpoint as tg_checkpoint
@@ -37,6 +38,36 @@ RUNNERS = [
 ]
 
 
+def _detect_resume() -> set[str]:
+    """Защита от двойного старта + восстановление после kill/OOM/reboot.
+
+    Возвращает set уже отработанных источников (если идём в режиме resume),
+    либо завершает процесс если другой парсер ещё активно работает.
+    """
+    from datetime import datetime, timedelta
+
+    prev = progress.read()
+    if prev.get("status") != "running":
+        return set()
+    last_update_str = prev.get("last_update")
+    if not last_update_str:
+        return set()
+    try:
+        last_update = datetime.fromisoformat(last_update_str)
+    except (ValueError, TypeError):
+        return set()
+    age = datetime.now() - last_update
+    if age < timedelta(hours=1):
+        print(f"⚠ progress.json status=running, last_update {int(age.total_seconds())}с назад.")
+        print("  Другой процесс ещё работает — выход. (если уверен в обратном — сбрось progress.json вручную)")
+        sys.exit(0)
+    print(f"♻ Stale progress.json ({age.total_seconds()/3600:.1f}ч) — RESUME.")
+    done = set(prev.get("completed_sources", []))
+    if done:
+        print(f"  Уже отработали: {sorted(done)}")
+    return done
+
+
 async def main():
     print("=" * 60)
     print("  CRIMEA HOTEL PARSER — запуск всех источников")
@@ -48,6 +79,8 @@ async def main():
     only_source = (os.getenv("ONLY_SOURCE") or "").strip().lower()
     skip_enrichment = os.getenv("SKIP_ENRICHMENT", "0").lower() in ("1", "true", "yes")
 
+    completed_already = _detect_resume()
+
     runners = RUNNERS
     if only_source:
         runners = [r for r in RUNNERS if r[2] == only_source]
@@ -55,12 +88,19 @@ async def main():
             print(f"⚠ ONLY_SOURCE={only_source!r} не совпадает ни с одним источником: "
                   f"{[r[2] for r in RUNNERS]}")
             return
+    if completed_already:
+        runners = [r for r in runners if r[0] not in completed_already]
+        print(f"  После фильтра resume осталось runners: {[r[0] for r in runners]}")
 
     print(f"Headless: {headless}, ONLY_SOURCE: {only_source or '—'}, "
           f"SKIP_ENRICHMENT: {skip_enrichment}")
     print(f"Источники: {[r[0] for r in runners]}")
 
     progress.mark_started()
+    # Resume — восстанавливаем список уже отработанных, чтобы mark_completed_source
+    # дальше дописывался поверх, а не начинался с нуля.
+    if completed_already:
+        progress.update(completed_sources=sorted(completed_already))
     import time
     from utils.storage import total as storage_total
 
