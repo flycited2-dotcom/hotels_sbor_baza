@@ -14,6 +14,7 @@ function onOpen(){
   SpreadsheetApp.getUi().createMenu('📧 Рассылка')
     .addItem('Отправить черновики (до '+DAILY_CAP+')','sendCampaignDrafts')
     .addItem('Отметить ответивших','markReplied')
+    .addItem('Отметить bounced (mailer-daemon)','markBounced')
     .addItem('Пометить для фоллоу-апа (5+ дней)','flagFollowups')
     .addItem('Обновить дашборд','buildDashboard')
     .addSeparator()
@@ -46,6 +47,32 @@ function markReplied(){
     if(em&&st==='отправлено'&&sg!=='ответил'&&GmailApp.search('from:'+em+' newer_than:30d').length){ sh.getRange(i+1,c['Этап']+1).setValue('ответил'); n++; }
   }
   buildDashboard(); _alert('Помечено «ответил»: '+n);
+}
+
+function markBounced(){
+  const deadline=Date.now()+TIME_BUDGET_MS;
+  const sh=_sheet(), data=sh.getDataRange().getValues(), c=_cols(data[0]);
+  const rowByEmail={};
+  for(let i=1;i<data.length;i++){ const em=_email(data[i][c.Email]); if(em) rowByEmail[em]=i; }
+  const failed=new Set();
+  const threads=GmailApp.search('from:(mailer-daemon OR postmaster) newer_than:30d', 0, 50);
+  for(const t of threads){
+    if(Date.now()>deadline) break;
+    for(const m of t.getMessages()){
+      const raw=m.getRawContent()||'';
+      const hdr=(raw.match(/X-Failed-Recipients:\s*([^\r\n]+)/i)||[])[1];
+      if(!hdr) continue;                                  // если заголовка нет — пропускаем (избегаем ложных срабатываний)
+      hdr.split(/[,;\s]+/).forEach(s=>{ const e=_email(s); if(e) failed.add(e); });
+    }
+  }
+  let n=0;
+  for(const em of failed){
+    if(!(em in rowByEmail)) continue;                     // только наши контакты
+    const r=rowByEmail[em];
+    const st=String(data[r][c['Статус']]).trim().toLowerCase();
+    if(st!=='bounced'){ sh.getRange(r+1,c['Статус']+1).setValue('bounced'); n++; }
+  }
+  buildDashboard(); _alert('Отмечено bounced: '+n+' (найдено в баунсах: '+failed.size+')');
 }
 
 function flagFollowups(){
