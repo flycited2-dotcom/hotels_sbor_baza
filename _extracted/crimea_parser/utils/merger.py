@@ -45,6 +45,13 @@ def build_master(output_dir: str = OUTPUT_DIR) -> str:
 
     seen: OrderedDict[str, dict] = OrderedDict()
 
+    # crimea_archive.timer архивирует и удаляет result_*.csv старше 30 дней —
+    # без этой строки их данные пропадали бы из master при каждом ребилде.
+    # master_all.csv — единственное место, где история переживает архивацию.
+    master_path = os.path.join(output_dir, "master_all.csv")
+    if os.path.exists(master_path):
+        _load_csv_into(master_path, seen)
+
     # Load raw files first (skip those that have an enriched version)
     for filepath in raw_files:
         base = os.path.basename(filepath)
@@ -60,7 +67,6 @@ def build_master(output_dir: str = OUTPUT_DIR) -> str:
         _load_csv_into(filepath, seen)
 
     rows = list(seen.values())
-    master_path = os.path.join(output_dir, "master_all.csv")
     os.makedirs(output_dir, exist_ok=True)
     with open(master_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(

@@ -29,6 +29,9 @@ Thumbs.db
 credentials.json
 service_account*.json
 google-credentials*.json
+client_secrets.json
+client_secret*.json
+token.json
 
 # Parser output
 output/

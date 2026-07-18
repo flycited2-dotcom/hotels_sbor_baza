@@ -61,6 +61,15 @@ def _detect_resume() -> set[str]:
         print(f"⚠ progress.json status=running, last_update {int(age.total_seconds())}с назад.")
         print("  Другой процесс ещё работает — выход. (если уверен в обратном — сбрось progress.json вручную)")
         sys.exit(0)
+    # crimea_parser.timer запускается раз в неделю. Если процесс, оставивший
+    # "running", убит TimeoutStartSec (12h) и с тех пор прошло больше ~сутки —
+    # это не тот же цикл, а огрызок от прошлой недели. Резюмировать с его
+    # completed_sources нельзя: легко получить runners=[] и пустой прогон
+    # (см. инцидент 12.07 — прогон "успешно" завершился за 12с, 0 записей).
+    if age > timedelta(hours=20):
+        print(f"⚠ progress.json устарел ({age.total_seconds()/3600:.1f}ч) — похоже, "
+              "это огрызок прошлого цикла. Игнорируем, стартуем с нуля.")
+        return set()
     print(f"♻ Stale progress.json ({age.total_seconds()/3600:.1f}ч) — RESUME.")
     done = set(prev.get("completed_sources", []))
     if done:
